@@ -1,851 +1,1041 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
 import {
   Image,
   ImageBackground,
-  SafeAreaView,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
-import { testFirebase } from '../testFirestore';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const gold = '#D4A017';
+const accent = '#C6F135';
+const airportBlue = '#4DA3FF';
+const bg = '#050505';
+const cardBg = '#141414';
+const muted = '#8A8A8A';
 
-export default function HomeScreen() {
-  const [region, setRegion] = useState({
-    latitude: 36.462,
-    longitude: 7.426,
-    latitudeDelta: 0.028,
-    longitudeDelta: 0.028,
-  });
-
-  const [clientPosition, setClientPosition] = useState({
-    latitude: 36.462,
-    longitude: 7.426,
-  });
-
-  const [driverPosition, setDriverPosition] = useState({
-    latitude: 36.456,
-    longitude: 7.418,
-  });
-
-  useEffect(() => {
-    getLocation();
-  }, []);
-
-  const getLocation = async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-
-    if (status !== 'granted') {
-      return;
-    }
-
-    const location = await Location.getCurrentPositionAsync({});
-
-    const userPosition = {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    };
-
-    setClientPosition(userPosition);
-
-    setDriverPosition({
-      latitude: location.coords.latitude - 0.006,
-      longitude: location.coords.longitude - 0.008,
-    });
-
-    setRegion({
-      ...userPosition,
-      latitudeDelta: 0.028,
-      longitudeDelta: 0.028,
-    });
-  };
-
-  const goReservation = () => {
-    router.push({
-      pathname: '/reservation-details',
-      params: { service: 'aeroport' },
-    });
-  };
-
- const goDetails = (service: string) => {
-  if (service === 'aeroport') {
-    router.push('/reservation-details');
-    return;
-  }
-
-  if (service === 'ville') {
-    router.push('/city');
-    return;
-  }
-
-  if (service === 'hotel') {
-    router.push('/hotel');
-    return;
-  }
-
-  if (service === 'prise-en-charge') {
-    router.push('/prise-en-charge');
-    return;
-  }
+type PrimaryService = {
+  id: string;
+  title: string;
+  subtitle: string;
+  badge: string;
+  badgeIcon: keyof typeof Ionicons.glyphMap;
+  cardIcon: keyof typeof Ionicons.glyphMap;
+  accentColor: string;
+  image: number;
+  route: string;
 };
 
+type SecondaryService = {
+  id: string;
+  title: string;
+  subtitle: string;
+  image: number;
+  route: string;
+};
+
+type NavItem = {
+  id: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  route: string;
+  badge?: number;
+};
+
+const PRIMARY_SERVICES: PrimaryService[] = [
+  {
+    id: 'taxi',
+    title: 'Taxi',
+    subtitle: 'Courses rapides 24h/24',
+    badge: '24h/24',
+    badgeIcon: 'time-outline',
+    cardIcon: 'car-sport',
+    accentColor: accent,
+    image: require('../assets/images/hero-bg.png'),
+    route: '/city',
+  },
+  {
+    id: 'airport',
+    title: 'Aéroport',
+    subtitle: 'Transferts vers tous les aéroports',
+    badge: 'Aéroport',
+    badgeIcon: 'airplane',
+    cardIcon: 'airplane',
+    accentColor: airportBlue,
+    image: require('../assets/images/airport-premium.jpg'),
+    route: '/reservation-details',
+  },
+];
+
+const SECONDARY_SERVICES: SecondaryService[] = [
+  {
+    id: 'chauffeur',
+    title: 'Chauffeur privé',
+    subtitle: 'Confort & discrétion',
+    image: require('../assets/images/services/chauffeur-prive.jpg'),
+    route: '/city',
+  },
+  {
+    id: 'long',
+    title: 'Long trajet',
+    subtitle: 'Voyagez vers d’autres wilayas',
+    image: require('../assets/images/services/long-trajet.jpg'),
+    route: '/prise-en-charge',
+  },
+  {
+    id: 'rental',
+    title: 'Location véhicules',
+    subtitle: 'Voiture, moto et vélo à votre disposition',
+    image: require('../assets/images/services/location-vehicules.jpg'),
+    route: '/menu',
+  },
+  {
+    id: 'circuits',
+    title: 'Circuits touristiques',
+    subtitle: 'Découvrez les plus beaux sites de Guelma',
+    image: require('../assets/images/services/circuits-touristiques.jpg'),
+    route: '/prise-en-charge',
+  },
+  {
+    id: 'hotels',
+    title: 'Séjours & Hôtels',
+    subtitle: 'Hébergements, restaurants et expériences uniques',
+    image: require('../assets/images/services/hotels-premium.jpg'),
+    route: '/hotel',
+  },
+  {
+    id: 'more',
+    title: 'Explorer plus',
+    subtitle: 'Encore plus de services pour vous',
+    image: require('../assets/images/services/explorer-plus.jpg'),
+    route: '/menu',
+  },
+];
+
+const NAV_ITEMS: NavItem[] = [
+  { id: 'home', label: 'Accueil', icon: 'home', route: '/' },
+  { id: 'bookings', label: 'Réservations', icon: 'calendar-outline', route: '/reservation' },
+  { id: 'favorites', label: 'Favoris', icon: 'heart-outline', route: '/history' },
+  { id: 'messages', label: 'Messages', icon: 'chatbubble-outline', route: '/notifications', badge: 2 },
+  { id: 'profile', label: 'Profil', icon: 'person-outline', route: '/profile' },
+];
+
+export default function HomeScreen() {
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="light" />
-      <TouchableOpacity
-  onPress={testFirebase}
-  style={{
-    backgroundColor: '#00C853',
-    padding: 12,
-    borderRadius: 12,
-    marginHorizontal: 20,
-    marginTop: 10,
-    alignItems: 'center',
-  }}
->
-  <Text style={{ color: '#FFF', fontWeight: '900' }}>
-    TEST FIREBASE
-  </Text>
-</TouchableOpacity>
-      <TouchableOpacity
-  onPress={() => router.push('/admin-dashboard')}
-  style={{
-    backgroundColor: '#FFD700',
-    padding: 12,
-    borderRadius: 12,
-    marginTop: 20,
-    marginHorizontal: 20,
-    alignItems: 'center',
-  }}
->
-  <Text style={{ color: '#111', fontWeight: '900' }}>
-    ADMIN DASHBOARD
-  </Text>
-</TouchableOpacity>
-<TouchableOpacity
-  onPress={() => router.push('/drivers-dashboard')}
-  style={{
-    backgroundColor: '#111',
-    borderWidth: 1,
-    borderColor: '#FFD700',
-    padding: 12,
-    borderRadius: 12,
-    marginTop: 12,
-    marginHorizontal: 20,
-    alignItems: 'center',
-  }}
->
-  <Text style={{ color: '#FFD700', fontWeight: '900' }}>
-    DRIVERS DASHBOARD
-  </Text>
-</TouchableOpacity>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        <ImageBackground
-          source={require('../assets/images/hero-bg.png')}
-          style={styles.hero}
-          imageStyle={styles.heroImage}
-        >
-          <LinearGradient
-            colors={[
-              'rgba(0,0,0,0.20)',
-              'rgba(0,0,0,0.58)',
-              '#050505',
-            ]}
-            style={styles.heroOverlay}
-          >
-            <View style={styles.header}>
-              <Image
-                source={require('../assets/images/logo.png')}
-                style={styles.logo}
-                resizeMode="contain"
-              />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <HomeHeader />
 
-              <View style={styles.headerBtns}>
-                <TouchableOpacity
-                  style={styles.headerBtn}
-                  activeOpacity={0.85}
-                  onPress={() => router.push('/reservation')}
-                >
-                  <Ionicons name="calendar-outline" size={25} color={gold} />
-                  <Text style={styles.headerBtnText}>Réserv.</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.headerBtn}
-                  activeOpacity={0.85}
-                  onPress={() => router.push('/menu')}
-                >
-                  <Ionicons name="menu" size={30} color={gold} />
-                  <Text style={styles.headerBtnText}>Menu</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.heroContent}>
-              <Text style={styles.title}>
-                Votre trajet,{'\n'}notre <Text style={styles.gold}>priorité.</Text>
-              </Text>
-
-              <Text style={styles.description}>
-                Transferts privés, confortables et sécurisés 24h/24, partout.
-              </Text>
-
-              <View style={styles.heroButtons}>
-                <TouchableOpacity
-                  style={styles.reserveBtn}
-                  activeOpacity={0.9}
-                  onPress={goReservation}
-                >
-                  <Text style={styles.reserveText}>Réserver maintenant</Text>
-
-                  <View style={styles.reserveIcon}>
-                    <Ionicons name="arrow-forward" size={25} color="#FFF" />
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.airportBtn}
-                  activeOpacity={0.9}
-                  onPress={() => goDetails('aeroport')}
-                >
-                  <Ionicons name="airplane" size={25} color={gold} />
-                  <Text style={styles.airportText}>Transfert aéroport</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.quickBox}>
-                <QuickInfo icon="time-outline" title="Disponible" text="24h/24 - 7j/7" />
-                <QuickInfo icon="shield-checkmark-outline" title="Sécurité" text="Chauffeurs pros" />
-                <QuickInfo icon="car-sport-outline" title="Confort" text="Véhicules premium" />
-              </View>
-            </View>
-          </LinearGradient>
-        </ImageBackground>
-
-        <View style={styles.body}>
-          <View style={styles.liveMapBox}>
-            <View style={styles.liveLeft}>
-              <View style={styles.mapTitleRow}>
-                <Ionicons name="location" size={22} color={gold} />
-                <View>
-                  <Text style={styles.liveTitle}>Chauffeur proche de vous</Text>
-                  <Text style={styles.liveSub}>Arrivée estimée : 3 min</Text>
-                </View>
-              </View>
-
-              <View style={styles.driverMini}>
-                <View style={styles.driverAvatar}>
-                  <Ionicons name="person" size={25} color="#111" />
-                </View>
-
-                <View>
-                  <Text style={styles.driverName}>Taxi Mehdi 24</Text>
-                  <Text style={styles.driverCar}>Renault Clio • 5.0</Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                style={styles.followBtn}
-                activeOpacity={0.9}
-                onPress={() => router.push('/course-tracking')}
-              >
-                <Text style={styles.followText}>Suivre mon trajet</Text>
-                <Ionicons name="arrow-forward" size={18} color={gold} />
-              </TouchableOpacity>
-            </View>
-
-            <MapView
-              style={styles.liveMap}
-              region={region}
-              scrollEnabled={false}
-              zoomEnabled={false}
-              pitchEnabled={false}
-              rotateEnabled={false}
-            >
-              <Polyline
-                coordinates={[driverPosition, clientPosition]}
-                strokeColor={gold}
-                strokeWidth={4}
-              />
-
-              <Marker coordinate={driverPosition}>
-                <View style={styles.carMarker}>
-                  <Ionicons name="car-sport" size={18} color="#111" />
-                </View>
-              </Marker>
-
-              <Marker coordinate={clientPosition}>
-                <View style={styles.pinMarker}>
-                  <Ionicons name="location" size={20} color="#FFF" />
-                </View>
-              </Marker>
-            </MapView>
-          </View>
-                    <View style={styles.stepsBox}>
-            <Text style={styles.stepsTitle}>
-              Réserver en <Text style={styles.gold}>3</Text> étapes simples
-            </Text>
-
-            <View style={styles.stepsRow}>
-              <Step icon="calendar-outline" title="1. Choisissez" text="votre service" />
-              <Step icon="location-outline" title="2. Indiquez" text="les détails" />
-              <Step icon="card-outline" title="3. Confirmez" text="et voyagez" />
-            </View>
-          </View>
-
-          <ServiceCard
-            icon="airplane"
-            title="AÉROPORT"
-            text="Transferts vers tous les aéroports"
-            sub="Guelma • Annaba • Constantine • Alger • Tunis"
-            badge="Le plus demandé"
-            onPress={() => goDetails('aeroport')}
-          />
-
-          <ServiceCard
-            icon="business-outline"
-            title="HÔTEL"
-            text="Transferts vers votre hôtel"
-            sub="Hôtels en Algérie & Tunisie"
-            badge="Premium"
-             onPress={() => router.push('/hotel')}
-          />
-
-          <ServiceCard
-            icon="car-sport-outline"
-            title="DÉPLACEMENT EN VILLE"
-            text="Trajets privés, rendez-vous, événements"
-            sub="Service rapide et discret"
-            badge="Rapide"
-            onPress={() => router.push('/city')}
-          />
-
-          <ServiceCard
-            icon="map-outline"
-            title="PRISE EN CHARGE"
-            text="Transferts privés toutes distances" 
-            sub="Alger • Tunis • Annaba • Constantine"
-            badge="Premium"
-           onPress={() => router.push('/prise-en-charge')}
-          />
-
-          <View style={styles.footer}>
-            <FooterItem icon="shield-checkmark-outline" title="Sécurité" text="Chauffeurs professionnels" />
-            <FooterItem icon="time-outline" title="Ponctualité" text="Arrivée à l’heure" />
-            <FooterItem icon="star-outline" title="Fiabilité" text="Service de qualité" />
-            <FooterItem icon="headset-outline" title="Support 24/7" text="Toujours disponible" />
-          </View>
+        <View style={styles.primaryRow}>
+          {PRIMARY_SERVICES.map((service) => (
+            <PrimaryServiceCard
+              key={service.id}
+              service={service}
+              onPress={() => router.push(service.route as never)}
+            />
+          ))}
         </View>
+
+        <DiscoverGuelmaBanner onPress={() => router.push('/city')} />
+
+        <SectionHeader title="Nos services" />
+        <View style={styles.secondaryGrid}>
+          {SECONDARY_SERVICES.map((service) => (
+            <SecondaryServiceCard
+              key={service.id}
+              service={service}
+              onPress={() => router.push(service.route as never)}
+            />
+          ))}
+        </View>
+
+        <AssistanceBlock />
       </ScrollView>
+
+      <BottomNav activeId="home" />
     </SafeAreaView>
   );
 }
 
-function QuickInfo({ icon, title, text }: any) {
+function HomeHeader() {
   return (
-    <View style={styles.quickItem}>
-      <Ionicons name={icon} size={24} color={gold} />
-
-      <View style={{ flex: 1 }}>
-        <Text style={styles.quickTitle}>{title}</Text>
-        <Text style={styles.quickText}>{text}</Text>
-      </View>
-    </View>
-  );
-}
-
-function Step({ icon, title, text }: any) {
-  return (
-    <View style={styles.step}>
-      <View style={styles.stepIcon}>
-        <Ionicons name={icon} size={25} color={gold} />
-      </View>
-
-      <Text style={styles.stepTitle}>{title}</Text>
-      <Text style={styles.stepText}>{text}</Text>
-    </View>
-  );
-}
-
-function ServiceCard({ icon, title, text, sub, badge, onPress }: any) {
-  return (
-    <TouchableOpacity style={styles.card} activeOpacity={0.92} onPress={onPress}>
-      <View style={styles.cardIcon}>
-        <Ionicons name={icon} size={32} color={gold} />
-      </View>
-
-      <View style={styles.cardContent}>
-        <View style={styles.cardTitleRow}>
-          <Text style={styles.cardTitle}>{title}</Text>
-
-          {badge && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{badge}</Text>
-            </View>
-          )}
+    <View style={styles.header}>
+      <View style={styles.headerLeft}>
+        <View style={styles.avatarWrap}>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={22} color="#111" />
+          </View>
+          <View style={styles.onlineDot} />
         </View>
 
-        <Text style={styles.cardText}>{text}</Text>
-        <Text style={styles.cardSub}>{sub}</Text>
+        <View style={styles.headerText}>
+          <Text style={styles.greeting}>Bonjour, Mehdi 👋</Text>
+          <Text style={styles.greetingSub}>Où allons-nous aujourd&apos;hui ?</Text>
+        </View>
       </View>
 
-      <Ionicons name="chevron-forward" size={28} color="#FFF" />
-    </TouchableOpacity>
-  );
-}
+      <View style={styles.headerActions}>
+        <TouchableOpacity
+          style={styles.iconBtn}
+          activeOpacity={0.85}
+          onPress={() => router.push('/notifications')}
+        >
+          <Ionicons name="notifications-outline" size={22} color="#FFF" />
+          <View style={styles.notifDot} />
+        </TouchableOpacity>
 
-function FooterItem({ icon, title, text }: any) {
-  return (
-    <View style={styles.footerItem}>
-      <Ionicons name={icon} size={27} color={gold} />
-      <Text style={styles.footerTitle}>{title}</Text>
-      <Text style={styles.footerText}>{text}</Text>
+        <TouchableOpacity
+          style={styles.brandPill}
+          activeOpacity={0.85}
+          onPress={() => router.push('/menu')}
+        >
+          <Text style={styles.brandCrown}>👑</Text>
+          <Text style={styles.brandPillText}>PROTAXI</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
+
+function PrimaryServiceCard({
+  service,
+  onPress,
+}: {
+  service: PrimaryService;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.primaryCard, pressed && styles.pressed]}
+      onPress={onPress}
+    >
+      <ImageBackground
+        source={service.image}
+        style={styles.primaryImage}
+        imageStyle={styles.primaryImageStyle}
+      >
+        <LinearGradient
+          colors={['rgba(0,0,0,0.1)', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.9)']}
+          style={styles.primaryGradient}
+        >
+          <View style={[styles.primaryBadge, { borderColor: `${service.accentColor}55` }]}>
+            <Ionicons name={service.badgeIcon} size={11} color={service.accentColor} />
+            <Text style={[styles.primaryBadgeText, { color: service.accentColor }]}>
+              {service.badge}
+            </Text>
+          </View>
+
+          <View style={styles.primaryBody}>
+            <View style={[styles.primaryIconCircle, { backgroundColor: `${service.accentColor}22` }]}>
+              <Ionicons name={service.cardIcon} size={22} color={service.accentColor} />
+            </View>
+
+            <View style={styles.primaryFooter}>
+              <View style={styles.primaryTextWrap}>
+                <Text style={styles.primaryTitle}>{service.title}</Text>
+                <Text style={styles.primarySubtitle} numberOfLines={2}>
+                  {service.subtitle}
+                </Text>
+              </View>
+
+              <View style={[styles.primaryArrow, { backgroundColor: service.accentColor }]}>
+                <Ionicons name="arrow-forward" size={16} color="#111" />
+              </View>
+            </View>
+          </View>
+        </LinearGradient>
+      </ImageBackground>
+    </Pressable>
+  );
+}
+
+function DiscoverGuelmaBanner({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.discoverCard, pressed && styles.pressed]}
+      onPress={onPress}
+    >
+      <Image
+        source={require('../assets/images/theatre-romain.jpg')}
+        resizeMode="cover"
+        style={styles.discoverBackdrop}
+      />
+
+      <LinearGradient
+        colors={[
+          'rgba(0,0,0,0.55)',
+          'rgba(0,0,0,0.28)',
+          'rgba(0,0,0,0.08)',
+          'rgba(0,0,0,0)',
+        ]}
+        locations={[0, 0.22, 0.38, 0.52]}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={styles.discoverFadeHorizontal}
+      />
+
+      <LinearGradient
+        colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.12)']}
+        style={styles.discoverFadeVertical}
+      />
+
+      <View style={styles.discoverContent}>
+        <View style={styles.discoverLabel}>
+          <Text style={styles.discoverEmoji}>🌴</Text>
+          <Text style={styles.discoverLabelText}>DÉCOUVRIR GUELMA</Text>
+        </View>
+
+        <View style={styles.discoverTextBlock}>
+          <Text style={styles.discoverTitle}>
+            Explorez les merveilles de notre{' '}
+            <Text style={styles.discoverHighlight}>wilaya</Text>
+          </Text>
+
+          <Text style={styles.discoverDesc}>
+            Nature, histoire, culture, gastronomie et bien plus.
+          </Text>
+        </View>
+
+        <TouchableOpacity style={styles.discoverCta} activeOpacity={0.9} onPress={onPress}>
+          <Text style={styles.discoverCtaText}>Découvrir maintenant</Text>
+          <Ionicons name="chevron-forward" size={15} color="#111" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.discoverDotsRow}>
+        <View style={[styles.dot, styles.dotActive]} />
+        <View style={styles.dot} />
+        <View style={styles.dot} />
+        <View style={styles.dot} />
+      </View>
+
+      <TouchableOpacity
+        style={styles.bookmarkBtnFloating}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="bookmark-outline" size={18} color="#FFF" />
+      </TouchableOpacity>
+    </Pressable>
+  );
+}
+
+function SecondaryServiceCard({
+  service,
+  onPress,
+}: {
+  service: SecondaryService;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.serviceCard, pressed && styles.pressed]}
+      onPress={onPress}
+    >
+      <Image
+        source={service.image}
+        resizeMode="contain"
+        style={styles.serviceImage}
+      />
+
+      <LinearGradient
+        colors={['transparent', 'rgba(198,241,53,0.10)', 'transparent']}
+        start={{ x: 0, y: 0.5 }}
+        end={{ x: 1, y: 0.5 }}
+        style={styles.serviceGlow}
+      />
+
+      <View style={styles.serviceContent}>
+        <View style={styles.serviceTextBlock}>
+          <Text style={styles.serviceTitle}>{service.title}</Text>
+          <Text style={styles.serviceSubtitle} numberOfLines={2}>
+            {service.subtitle}
+          </Text>
+        </View>
+
+        <View style={styles.serviceArrow}>
+          <Ionicons name="chevron-forward" size={18} color={accent} />
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <View style={styles.sectionAccent} />
+    </View>
+  );
+}
+
+function AssistanceBlock() {
+  return (
+    <View style={styles.assistanceCard}>
+      <View style={styles.assistanceIconWrap}>
+        <MaterialCommunityIcons name="headset" size={24} color={accent} />
+      </View>
+
+      <View style={styles.assistanceText}>
+        <Text style={styles.assistanceTitle}>Besoin d&apos;aide ?</Text>
+        <Text style={styles.assistanceDesc}>
+          Notre équipe est disponible 24h/24. Appelez-nous ou discutez en direct.
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={styles.assistanceCta}
+        activeOpacity={0.85}
+        onPress={() => router.push('/support')}
+      >
+        <Text style={styles.assistanceCtaText}>Nous contacter</Text>
+        <Ionicons name="chevron-forward" size={14} color={accent} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function BottomNav({ activeId }: { activeId: string }) {
+  return (
+    <SafeAreaView edges={['bottom']} style={styles.bottomNavSafe}>
+      <View style={styles.bottomNav}>
+        {NAV_ITEMS.map((item) => {
+          const active = item.id === activeId;
+
+          return (
+            <TouchableOpacity
+              key={item.id}
+              style={styles.navItem}
+              activeOpacity={0.85}
+              onPress={() => {
+                if (item.id !== activeId) {
+                  router.push(item.route as never);
+                }
+              }}
+            >
+              <View style={[styles.navIconWrap, active && styles.navIconWrapActive]}>
+                <Ionicons
+                  name={item.icon}
+                  size={22}
+                  color={active ? accent : muted}
+                />
+                {item.badge ? (
+                  <View style={styles.navBadge}>
+                    <Text style={styles.navBadgeText}>{item.badge}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text style={[styles.navLabel, active && styles.navLabelActive]}>
+                {item.label}
+              </Text>
+              {active ? <View style={styles.navActiveDot} /> : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const cardShadow = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.3,
+  shadowRadius: 14,
+  elevation: 8,
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#050505',
+    backgroundColor: bg,
   },
 
-  hero: {
-    height: 650,
-  },
-
-  heroImage: {
-    resizeMode: 'cover',
-    opacity: 0.9,
-  },
-
-  heroOverlay: {
-    flex: 1,
-    paddingHorizontal: 22,
-    paddingTop: 42,
-    paddingBottom: 28,
-    justifyContent: 'space-between',
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
   },
 
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-
-  logo: {
-    width: 460,
-    height: 172,
-    marginLeft: -140,
-    marginTop: -50,
-  },
-
-  headerBtns: {
-    flexDirection: 'row',
-    gap: 8,
-    marginLeft: -100,
-  },
-
-  headerBtn: {
-    width: 60,
-    height: 60,
-    borderRadius: 21,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.62)',
-    justifyContent: 'center',
     alignItems: 'center',
+    paddingTop: 8,
+    marginBottom: 22,
   },
 
-  headerBtnText: {
-    color: '#FFF',
-    fontSize: 9,
-    fontWeight: '900',
-    marginTop: 3,
-  },
-
-  heroContent: {
-    paddingBottom: 2,
-  },
-
-  title: {
-    color: '#FFF',
-    fontSize: 41,
-    fontWeight: '900',
-    lineHeight: 49,
-    letterSpacing: -1.2,
-  },
-
-  gold: {
-    color: gold,
-  },
-
-  description: {
-    color: '#EFEFEF',
-    fontSize: 16.5,
-    lineHeight: 25,
-    marginTop: 16,
-    width: '93%',
-    fontWeight: '600',
-  },
-
-  heroButtons: {
-    flexDirection: 'row',
-    gap: 11,
-    marginTop: 26,
-  },
-
-  reserveBtn: {
-    flex: 1.15,
-    height: 64,
-    borderRadius: 23,
-    backgroundColor: gold,
-    paddingHorizontal: 17,
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  reserveText: {
-    color: '#111',
-    fontSize: 17,
-    fontWeight: '900',
-  },
-
-  reserveIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#101010',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  airportBtn: {
-    flex: 1,
-    height: 64,
-    borderRadius: 23,
-    borderWidth: 1,
-    borderColor: gold,
-    backgroundColor: 'rgba(0,0,0,0.48)',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-  },
-
-  airportText: {
-    color: '#FFF',
-    fontSize: 14.5,
-    fontWeight: '900',
-    flexShrink: 1,
-  },
-
-  quickBox: {
-    minHeight: 82,
-    borderRadius: 24,
-    backgroundColor: 'rgba(10,10,10,0.74)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    marginTop: 26,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-  },
-
-  quickItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    width: '32%',
-  },
-
-  quickTitle: {
-    color: '#FFF',
-    fontSize: 11.5,
-    fontWeight: '900',
-  },
-
-  quickText: {
-    color: '#CFCFCF',
-    fontSize: 10.5,
-    marginTop: 2,
-  },
-
-  body: {
-    backgroundColor: '#050505',
-    paddingHorizontal: 18,
-    paddingBottom: 36,
-    marginTop: -28,
-  },
-
-  liveMapBox: {
-    backgroundColor: 'rgba(15,15,15,0.94)',
-    borderRadius: 30,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    marginBottom: 18,
-  },
-
-  liveLeft: {
-    marginBottom: 15,
-  },
-
-  mapTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  liveTitle: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-
-  liveSub: {
-    color: '#AAA',
-    fontSize: 13,
-    marginTop: 3,
-  },
-
-  driverMini: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 16,
     gap: 12,
-  },
-
-  driverAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: gold,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  driverName: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-
-  driverCar: {
-    color: '#AAA',
-    fontSize: 13,
-    marginTop: 3,
-  },
-
-  followBtn: {
-    height: 54,
-    borderRadius: 18,
-    backgroundColor: 'rgba(212,160,23,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.35)',
-    marginTop: 16,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-
-  followText: {
-    color: gold,
-    fontSize: 15,
-    fontWeight: '900',
-  },
-
-  liveMap: {
-    height: 220,
-    borderRadius: 24,
-  },
-
-  carMarker: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: gold,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  pinMarker: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#111',
-    borderWidth: 2,
-    borderColor: gold,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  stepsBox: {
-    backgroundColor: 'rgba(15,15,15,0.94)',
-    borderRadius: 28,
-    paddingVertical: 24,
-    paddingHorizontal: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    marginBottom: 18,
-  },
-
-  stepsTitle: {
-    color: '#FFF',
-    fontSize: 22,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-
-  stepsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-
-  step: {
-    width: '31%',
-    alignItems: 'center',
-  },
-
-  stepIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.7)',
-    backgroundColor: '#080808',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  stepTitle: {
-    color: '#FFF',
-    fontSize: 13.5,
-    fontWeight: '900',
-    marginTop: 12,
-    textAlign: 'center',
-  },
-
-  stepText: {
-    color: '#C8C8C8',
-    fontSize: 13,
-    marginTop: 3,
-    textAlign: 'center',
-  },
-
-  card: {
-    backgroundColor: 'rgba(15,15,15,0.94)',
-    borderRadius: 26,
-    paddingVertical: 20,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-
-  cardIcon: {
-    width: 66,
-    height: 66,
-    borderRadius: 20,
-    backgroundColor: '#090909',
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.62)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  cardContent: {
     flex: 1,
-    marginLeft: 16,
   },
 
-  cardTitleRow: {
-    flexDirection: 'row',
+  avatarWrap: {
+    position: 'relative',
+  },
+
+  avatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: accent,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    flexWrap: 'wrap',
   },
 
-  cardTitle: {
+  onlineDot: {
+    position: 'absolute',
+    bottom: 1,
+    right: 1,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: accent,
+    borderWidth: 2,
+    borderColor: bg,
+  },
+
+  headerText: {
+    flex: 1,
+  },
+
+  greeting: {
     color: '#FFF',
-    fontSize: 20,
-    fontWeight: '900',
+    fontSize: 17,
+    fontWeight: '800',
     letterSpacing: -0.3,
   },
 
-  badge: {
+  greetingSub: {
+    color: muted,
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  iconBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: cardBg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  notifDot: {
+    position: 'absolute',
+    top: 9,
+    right: 9,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: accent,
+  },
+
+  brandPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 20,
+    backgroundColor: 'rgba(198,241,53,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(198,241,53,0.28)',
+  },
+
+  brandCrown: {
+    fontSize: 12,
+  },
+
+  brandPillText: {
+    color: accent,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+
+  primaryRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+
+  primaryCard: {
+    flex: 1,
+    height: 210,
+    borderRadius: 22,
+    overflow: 'hidden',
+    ...cardShadow,
+  },
+
+  primaryImage: {
+    flex: 1,
+  },
+
+  primaryImageStyle: {
+    borderRadius: 22,
+  },
+
+  primaryGradient: {
+    flex: 1,
+    padding: 14,
+    justifyContent: 'space-between',
+  },
+
+  primaryBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 12,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    backgroundColor: 'rgba(212,160,23,0.15)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderWidth: 1,
   },
 
-  badgeText: {
-    color: gold,
+  primaryBadgeText: {
     fontSize: 10,
-    fontWeight: '900',
-  },
-
-  cardText: {
-    color: '#F1F1F1',
-    fontSize: 14,
-    marginTop: 5,
-    lineHeight: 20,
-  },
-
-  cardSub: {
-    color: gold,
-    fontSize: 13,
-    marginTop: 5,
-    lineHeight: 18,
     fontWeight: '700',
   },
 
-  footer: {
-    marginTop: 16,
-    backgroundColor: 'rgba(15,15,15,0.94)',
-    borderRadius: 28,
-    padding: 20,
+  primaryBody: {
+    gap: 12,
+  },
+
+  primaryIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  primaryFooter: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+
+  primaryTextWrap: {
+    flex: 1,
+  },
+
+  primaryTitle: {
+    color: '#FFF',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+
+  primarySubtitle: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 15,
+    fontWeight: '500',
+  },
+
+  primaryArrow: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  pressed: {
+    opacity: 0.92,
+    transform: [{ scale: 0.985 }],
+  },
+
+  discoverCard: {
+    height: 270,
+    borderRadius: 24,
+    overflow: 'hidden',
+    marginBottom: 28,
+    backgroundColor: bg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    ...cardShadow,
+  },
+
+  discoverBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    width: '102%',
+    height: '108%',
+    top: '-4%',
+    left: '-1%',
+  },
+
+  discoverFadeHorizontal: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+
+  discoverFadeVertical: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+
+  discoverContent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    width: '48%',
+    maxWidth: '48%',
+    zIndex: 2,
+    paddingLeft: 22,
+    paddingRight: 10,
+    paddingTop: 22,
+    paddingBottom: 42,
+    justifyContent: 'space-between',
+  },
+
+  discoverTextBlock: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingVertical: 6,
+    gap: 8,
+  },
+
+  discoverLabel: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
+
+  discoverEmoji: {
+    fontSize: 11,
+  },
+
+  discoverLabelText: {
+    color: accent,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+
+  bookmarkBtnFloating: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    zIndex: 3,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.38)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+
+  discoverDotsRow: {
+    position: 'absolute',
+    bottom: 16,
+    left: 0,
+    right: 0,
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+
+  discoverTitle: {
+    color: '#FFF',
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 22,
+    letterSpacing: -0.3,
+    width: '100%',
+  },
+
+  discoverHighlight: {
+    color: accent,
+  },
+
+  discoverDesc: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '500',
+    width: '100%',
+  },
+
+  discoverCta: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 22,
+    backgroundColor: accent,
+  },
+
+  discoverCtaText: {
+    color: '#111',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+
+  dotActive: {
+    width: 18,
+    backgroundColor: accent,
+  },
+
+  sectionHeader: {
+    marginTop: 4,
+    marginBottom: 16,
+  },
+
+  sectionTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+
+  sectionAccent: {
+    width: 36,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: accent,
+    marginTop: 6,
+  },
+
+  secondaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
+  },
+
+  serviceCard: {
+    width: '47%',
+    height: 220,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 28,
+    padding: 18,
+    marginBottom: 16,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+
+  serviceImage: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    right: -8,
+    top: 32,
+    opacity: 0.95,
+  },
+
+  serviceGlow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 54,
+    height: 2,
+    zIndex: 1,
+  },
+
+  serviceContent: {
+    flex: 1,
+    zIndex: 10,
+    justifyContent: 'space-between',
+  },
+
+  serviceTextBlock: {
+    maxWidth: '62%',
+  },
+
+  serviceTitle: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+
+  serviceSubtitle: {
+    color: '#A1A1AA',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+
+  serviceArrow: {
+    alignSelf: 'flex-start',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#0B0B0B',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  assistanceCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#1C1C1C',
+    borderRadius: 22,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    marginBottom: 8,
+    ...cardShadow,
+  },
+
+  assistanceIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#2A2A2A',
+    borderWidth: 1,
+    borderColor: 'rgba(198,241,53,0.10)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  assistanceText: {
+    flex: 1,
+  },
+
+  assistanceTitle: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+
+  assistanceDesc: {
+    color: muted,
+    fontSize: 10,
+    marginTop: 4,
+    lineHeight: 14,
+    fontWeight: '500',
+  },
+
+  assistanceCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
 
-  footerItem: {
-    width: '48%',
-    marginBottom: 18,
+  assistanceCtaText: {
+    color: accent,
+    fontSize: 10,
+    fontWeight: '700',
   },
 
-  footerTitle: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '900',
-    marginTop: 9,
+  bottomNavSafe: {
+    backgroundColor: bg,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.06)',
   },
 
-  footerText: {
-    color: '#BDBDBD',
-    fontSize: 13.5,
+  bottomNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingTop: 10,
+    paddingBottom: 6,
+    paddingHorizontal: 8,
+  },
+
+  navItem: {
+    alignItems: 'center',
+    minWidth: 58,
+  },
+
+  navIconWrap: {
+    position: 'relative',
+  },
+
+  navIconWrapActive: {
+    shadowColor: accent,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+
+  navBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+
+  navBadgeText: {
+    color: '#111',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+
+  navLabel: {
+    color: muted,
+    fontSize: 10,
     marginTop: 4,
-    lineHeight: 20,
+    fontWeight: '600',
+  },
+
+  navLabelActive: {
+    color: accent,
+  },
+
+  navActiveDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: accent,
+    marginTop: 4,
   },
 });
