@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
 import {
@@ -20,13 +20,45 @@ const goldLight = '#FFD700';
 const card = '#0E0E0E';
 const border = '#262626';
 
+function normalizeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
+
+function DiscoverSourceBadge() {
+  return (
+    <View style={styles.discoverBadge}>
+      <Ionicons name="compass-outline" size={12} color={gold} />
+      <Text style={styles.discoverBadgeText}>Depuis Découvrir Guelma</Text>
+    </View>
+  );
+}
+
 export default function HotelScreen() {
+  const params = useLocalSearchParams<{
+    hotelName?: string | string[];
+    source?: string | string[];
+    partnerId?: string | string[];
+    partnerName?: string | string[];
+  }>();
+
+  const incomingHotelName = normalizeParam(params.hotelName);
+  const incomingSource = normalizeParam(params.source);
+  const partnerId = normalizeParam(params.partnerId);
+  const partnerName = normalizeParam(params.partnerName);
+  const fromDiscoverGuelma = incomingSource === 'discover-guelma';
+  const fromPartner = incomingSource === 'partner';
+
   const [country, setCountry] = useState('Algérie');
-  const [destination, setDestination] = useState('Constantine');
-  const [customDestination, setCustomDestination] = useState('');
+  const [destination, setDestination] = useState(
+    incomingHotelName ? 'Autre destination' : 'Constantine',
+  );
+  const [customDestination, setCustomDestination] = useState(
+    incomingHotelName ? 'Guelma' : '',
+  );
   const [tripType, setTripType] = useState('Aller / Retour');
   const [departure, setDeparture] = useState('Guelma, Algérie');
-  const [hotelAddress, setHotelAddress] = useState('');
+  const [hotelAddress, setHotelAddress] = useState(incomingHotelName || '');
   const [goDate, setGoDate] = useState('');
   const [goTime, setGoTime] = useState('');
   const [returnDate, setReturnDate] = useState('');
@@ -35,7 +67,9 @@ export default function HotelScreen() {
   const [bags, setBags] = useState(2);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(() =>
+    incomingHotelName ? `Hôtel partenaire sélectionné : ${incomingHotelName}` : '',
+  );
   const [showGoDate, setShowGoDate] = useState(false);
   const [showGoTime, setShowGoTime] = useState(false);
   const [showReturnDate, setShowReturnDate] = useState(false);
@@ -117,6 +151,11 @@ export default function HotelScreen() {
         phone: phone || 'Non renseigné',
         notes: notes || 'Aucune note',
         price: formattedPrice,
+        ...(incomingHotelName ? { hotelName: incomingHotelName } : {}),
+        ...(fromDiscoverGuelma ? { source: incomingSource } : {}),
+        ...(fromPartner && partnerId
+          ? { source: 'partner', partnerId, partnerName }
+          : {}),
       },
     });
   };
@@ -129,6 +168,8 @@ export default function HotelScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={25} color="#FFF" />
         </TouchableOpacity>
+
+        {fromDiscoverGuelma ? <DiscoverSourceBadge /> : null}
 
         <ImageBackground
           source={require('../assets/images/hotel.jpg')}
@@ -451,6 +492,25 @@ function SummaryLine({ label, value }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#030303', paddingHorizontal: 18 },
   backBtn: { marginTop: 44, width: 44, height: 44, borderRadius: 22, backgroundColor: card, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: border, zIndex: 2 },
+  discoverBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(212,160,23,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.35)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  discoverBadgeText: {
+    color: gold,
+    fontSize: 11,
+    fontWeight: '800',
+  },
  heroCard: {
   height: 340,
   borderRadius: 28,

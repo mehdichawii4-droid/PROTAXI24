@@ -1,7 +1,9 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useState } from 'react';
 import {
+    Alert,
     SafeAreaView,
     ScrollView,
     StyleSheet,
@@ -9,41 +11,67 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import SimpleLocationMap from '../components/SimpleLocationMap';
+import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  cityRideInputFromParams,
+  cleanCityRidePrice,
+  submitCityRide,
+} from '@/services/cityRideService';
 
 const gold = '#D4A017';
 
+const getParam = (value: string | string[] | undefined, fallback = '') =>
+  String(Array.isArray(value) ? value[0] : value || fallback);
+
 export default function CitySummaryScreen() {
   const data = useLocalSearchParams();
+  const { profile } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const priceClean = String(data.price || 'Sur confirmation').replace(' DA', '');
+  const priceClean = cleanCityRidePrice(String(data.price || 'Sur confirmation'));
 
-  const goToTracking = () => {
-    if (data.rideMode === 'Réserver plus tard') {
-      router.push({
-        pathname: '/confirmation',
-        params: {
-          service: data.service || 'Ville 24H',
-          departure: data.departure || 'Départ à confirmer',
-          destination: data.destination || 'Destination à confirmer',
-          date: data.date || 'À confirmer',
-          time: data.time || 'À confirmer',
-          price: priceClean,
-          message: 'Votre course a été programmée avec succès.',
+  const goToTracking = async () => {
+    if (isSubmitting) return;
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await submitCityRide(
+        cityRideInputFromParams(data as Record<string, string | string[] | undefined>),
+        {
+          clientUid: getFirebaseAuth().currentUser?.uid,
+          profileFullName: profile?.fullName,
+          profilePhone: profile?.phone,
         },
-      });
-      return;
-    }
+      );
 
-    router.push({
-      pathname: '/course-tracking',
-      params: {
-        service: data.service || 'Ville 24H',
-        departure: data.departure || 'Départ à confirmer',
-        destination: data.destination || 'Destination à confirmer',
-        price: priceClean,
-      },
-    });
+      if (result.status === 'auth_required') {
+        Alert.alert(
+          'Connexion requise',
+          'Connectez-vous pour réserver une course taxi PROTAXI.',
+        );
+        return;
+      }
+
+      if (result.status === 'missing_ride_id') {
+        Alert.alert(
+          'Erreur',
+          'Impossible d’obtenir l’identifiant de la course. Veuillez réessayer.'
+        );
+        return;
+      }
+
+      if (result.status === 'error') {
+        Alert.alert(
+          'Erreur',
+          'Impossible d’enregistrer la course. Veuillez réessayer.'
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const region = {
@@ -77,9 +105,11 @@ export default function CitySummaryScreen() {
         </View>
 
         <View style={styles.mapContainer}>
-          <MapView style={styles.map} region={region}>
-            <Marker coordinate={region} title="PROTAXI" />
-          </MapView>
+          <SimpleLocationMap
+            mapStyle={styles.map}
+            region={region}
+            markerTitle="PROTAXI"
+          />
 
           <View style={styles.mapBadge}>
             <Ionicons name="car-sport-outline" size={18} color="#111" />
@@ -147,7 +177,7 @@ export default function CitySummaryScreen() {
           <SummaryRow
             icon="time-outline"
             label="Mode"
-            value={String(data.rideMode || 'Maintenant')}
+            value={getParam(data.rideMode, 'Maintenant')}
           />
 
           <SummaryRow
@@ -221,6 +251,7 @@ export default function CitySummaryScreen() {
           style={styles.mainBtn}
           activeOpacity={0.9}
           onPress={goToTracking}
+          disabled={isSubmitting}
         >
           <Text style={styles.mainBtnText}>Confirmer la demande</Text>
 

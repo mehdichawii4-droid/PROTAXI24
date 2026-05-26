@@ -11,6 +11,8 @@ import {
     View,
 } from 'react-native';
 
+import { pickPartnerFieldsFromParams } from '@/services/partnerService';
+
 const gold = '#D4A017';
 const goldLight = '#FFD700';
 const card = '#0E0E0E';
@@ -22,6 +24,10 @@ export default function HotelSummaryScreen() {
   const passengers = String(data.passengers || '2 passagers');
   const bags = String(data.bags || '2 bagages');
   const priceClean = String(data.price || 'Sur devis').replace(' DA', '');
+
+  const partnerFields = pickPartnerFieldsFromParams(
+    data as Record<string, string | string[] | undefined>,
+  );
 
   const goToConfirmation = () => {
     router.push({
@@ -42,6 +48,7 @@ export default function HotelSummaryScreen() {
         price: String(data.price || '0')
   .replace(' DA', '')
   .replace(/\s/g, ''),
+        ...partnerFields,
       },
     });
   };

@@ -4,8 +4,6 @@ import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
-  addDoc,
-  collection,
   doc,
   onSnapshot,
 } from 'firebase/firestore';
@@ -21,10 +19,9 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import MapView, { AnimatedRegion, Marker } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
+import ReservationDetailsMap from '@/components/ReservationDetailsMap';
+import { ReservationDetailsMapRef } from '@/components/ReservationDetailsMap.types';
 import { db } from '../firebaseConfig';
-import { GOOGLE_MAPS_API_KEY } from '../googleMapsConfig';
 
 
 const gold = '#D4A017';
@@ -46,7 +43,7 @@ const suggestions = [
 ];
 
 export default function ReservationDetailsScreen() {
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<ReservationDetailsMapRef | null>(null);
   const [mode, setMode] = useState<'deposer' | 'recuperer'>(
     'deposer'
   );
@@ -77,14 +74,6 @@ export default function ReservationDetailsScreen() {
   const [distanceKm, setDistanceKm] = useState(0);
 
   const [eta, setEta] = useState(0);
-  const [driverPosition] = useState(
-  new AnimatedRegion({
-    latitude: 36.4621,
-    longitude: 7.4261,
-    latitudeDelta: 0.02,
-    longitudeDelta: 0.02,
-  })
-);
 
   const [region, setRegion] = useState({
     latitude: 36.7525,
@@ -113,47 +102,6 @@ export default function ReservationDetailsScreen() {
       });
     })();
   }, []);
-useEffect(() => {
-  const unsubscribe = onSnapshot(
-    doc(db, 'driversLive', 'DRV-001'),
-    (docSnap) => {
-      const data = docSnap.data();
-
-      if (data?.latitude && data?.longitude) {
-        driverPosition.setValue({
-  latitude: data.latitude,
-  longitude: data.longitude,
-  latitudeDelta: 0.02,
-  longitudeDelta: 0.02,
-});
-
-mapRef.current?.fitToCoordinates(
-  [
-    {
-      latitude: region.latitude,
-      longitude: region.longitude,
-    },
-    {
-      latitude: data.latitude,
-      longitude: data.longitude,
-    },
-  ],
-  {
-    edgePadding: {
-      top: 120,
-      right: 70,
-      bottom: 120,
-      left: 70,
-    },
-    animated: true,
-  }
-);
-      }
-    }
-  );
-
-  return () => unsubscribe();
-}, []);
   let basePrice = 4000;
 
   let isCustomPrice = false;
@@ -239,7 +187,7 @@ const estimatedMinutes = Math.max(
 setEta(estimatedMinutes);
   };
 
- const confirmReservation = async () => {
+ const confirmReservation = () => {
     if (!address.trim()) {
       Alert.alert(
         'Adresse manquante',
@@ -269,40 +217,6 @@ setEta(estimatedMinutes);
       );
       return;
     }
-    await addDoc(collection(db, 'rides'), {
-  client: 'Client PROTAXI',
-  phone: '+213555000000',
-
-  service: 'Transfert aéroport',
-
-  departure: address,
-
-  destination:
-    airport === 'Autre aéroport'
-      ? customAirport
-      : airport,
-
-  price: isCustomPrice
-    ? 'Sur devis'
-    : `${price} DA`,
-
-  time: date.toLocaleTimeString('fr-FR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  }),
-
-  passengers,
-
-  bags,
-
-  tripType,
-
-  flightNumber,
-
-  status: 'En attente',
-
-  createdAt: new Date(),
-});
 
     router.push({
       pathname: '/confirmation',
@@ -341,8 +255,6 @@ setEta(estimatedMinutes);
       },
     });
   };
-const driverLat = 36.4621;
-const driverLng = 7.4261;
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
@@ -381,35 +293,13 @@ const driverLng = 7.4261;
         </View>
 
         <View style={styles.mapContainer}>
-  <MapView
-  ref={mapRef}
-    style={styles.map}
-    region={region}
-  >
-    <Marker coordinate={region} title="Vous" />
-
-   <Marker.Animated
-  coordinate={driverPosition as any}
-  title="Taxi Mehdi 24"
->
-  <Ionicons name="car-sport" size={34} color={gold} />
-</Marker.Animated>
-
-   <MapViewDirections
-  origin={{
-    latitude: driverLat,
-    longitude: driverLng,
-  }}
-  destination={{
-    latitude: region.latitude,
-    longitude: region.longitude,
-  }}
-  apikey={GOOGLE_MAPS_API_KEY}
-  strokeWidth={5}
-  strokeColor={gold}
-/>
-  </MapView>
-</View>
+          <ReservationDetailsMap
+            ref={mapRef}
+            mapStyle={styles.map}
+            region={region}
+            gold={gold}
+          />
+        </View>
 
         <View style={styles.modeBox}>
           <TouchableOpacity

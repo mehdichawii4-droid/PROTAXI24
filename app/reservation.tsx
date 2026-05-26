@@ -1,11 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 
 import * as Haptics from 'expo-haptics';
-import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { collection, doc, onSnapshot, orderBy, query, updateDoc, where } from 'firebase/firestore';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
@@ -16,124 +15,98 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import {
+  configureNotificationHandler,
+  getClientEventFromStatus,
+  mapRideNotificationContext,
+  notifyClient,
+  requestNotificationPermissions,
+} from '@/services/notificationService';
+import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
+import { devError } from '@/utils/devLog';
+import { formatRidePriceDzd } from '@/utils/rideTracking';
 import { db } from '../firebaseConfig';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
 const phoneLink = '+213671421448';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+configureNotificationHandler();
 
 export default function ReservationsScreen() {
+  const { user } = useAuth();
   const [reservations, setReservations] = useState<any[]>([]);
-  const [lastStatuses, setLastStatuses] = useState<any>({});
+  const lastStatusesRef = useRef<Record<string, string>>({});
+  const isFirstLoadRef = useRef(true);
+  const notifiedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    Notifications.requestPermissionsAsync();
-
-    
+    void requestNotificationPermissions();
   }, []);
 
-  
- useEffect(() => {
-  const unsubscribe = onSnapshot(
-    collection(db, 'rides'),
-    (snapshot) => {
-      const ridesData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-       
-      }));
-      snapshot.docs.forEach((doc) => {
+  useEffect(() => {
+    const clientUid = user?.uid ?? getFirebaseAuth().currentUser?.uid;
 
-  const ride: any = doc.data();
-const previousStatus = lastStatuses[doc.id];
-
-if (previousStatus === ride.status) return;
-  if (ride.status === 'Attribuée' && ride.driverName) {
-  Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Chauffeur attribué 🚖',
-      body: `${ride.driverName} arrive pour votre course.`,
-      sound: true,
-    },
-    trigger: null,
-  });
-}
-if (ride.status === 'En route') {
-  Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Chauffeur en route 🛣️',
-      body: 'Votre chauffeur est en route vers vous.',
-      sound: true,
-    },
-    trigger: null,
-  });
-}
-if (ride.status === 'Arrivé') {
-  Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Chauffeur arrivé 📍',
-      body: 'Votre chauffeur est arrivé au point de prise en charge.',
-      sound: true,
-    },
-    trigger: null,
-  });
-}
-if (ride.status === 'Terminée') {
-  Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Course terminée ✅',
-      body: 'Merci d’avoir utilisé PROTAXI24.',
-      sound: true,
-    },
-    trigger: null,
-  });
-}
-setLastStatuses((prev: any) => ({
-  ...prev,
-  [doc.id]: ride.status,
-}));
-});
-
-      const sorted = ridesData.sort((a: any, b: any) => {
-        return (
-          new Date(b.createdAt?.seconds
-            ? b.createdAt.seconds * 1000
-            : b.createdAt || 0
-          ).getTime() -
-          new Date(a.createdAt?.seconds
-            ? a.createdAt.seconds * 1000
-            : a.createdAt || 0
-          ).getTime()
-        );
-      });
-
-      setReservations(sorted);
+    if (!clientUid) {
+      setReservations([]);
+      lastStatusesRef.current = {};
+      isFirstLoadRef.current = true;
+      return undefined;
     }
-  );
 
-  return () => unsubscribe();
-}, []);
+    const ridesQuery = query(
+      collection(db, 'rides'),
+      where('clientUid', '==', clientUid),
+      orderBy('createdAt', 'desc'),
+    );
 
-  const sendLocalNotification = async (title: string, body: string) => {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        sound: true,
+    const unsubscribe = onSnapshot(
+      ridesQuery,
+      (snapshot) => {
+        const ridesData = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+
+        snapshot.docs.forEach((docSnap) => {
+          const ride: any = docSnap.data();
+          const previousStatus = lastStatusesRef.current[docSnap.id];
+
+          if (isFirstLoadRef.current) {
+            lastStatusesRef.current[docSnap.id] = ride.status;
+            return;
+          }
+
+          if (previousStatus === ride.status) return;
+
+          lastStatusesRef.current[docSnap.id] = ride.status;
+
+          const rideContext = mapRideNotificationContext({
+            id: docSnap.id,
+            ...ride,
+          });
+          const clientEvent = getClientEventFromStatus(ride.status, rideContext);
+
+          if (clientEvent) {
+            void notifyClient(notifiedRef.current, clientEvent, rideContext);
+          }
+        });
+
+        if (isFirstLoadRef.current) {
+          isFirstLoadRef.current = false;
+        }
+
+        setReservations(ridesData);
       },
-      trigger: null,
-    });
-  };
+      (error) => {
+        devError('[SNAPSHOT DENIED - reservation - rides]', error);
+        setReservations([]);
+      },
+    );
+
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   const openWhatsApp = (item: any) => {
     const reservationId = String(item.id || '').slice(-6);
@@ -146,7 +119,7 @@ Aéroport : ${item.airport || '-'}
 Adresse : ${item.address || '-'}
 Date : ${item.date || '-'}
 Heure : ${item.time || '-'}
-Prix : ${Number(item.price || 0).toLocaleString('fr-FR')} DZD`
+Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
     );
 
     Linking.openURL(
@@ -185,9 +158,10 @@ Prix : ${Number(item.price || 0).toLocaleString('fr-FR')} DZD`
             Haptics.NotificationFeedbackType.Warning
           );
 
-          await sendLocalNotification(
-            'Réservation annulée',
-            'Votre réservation PROTAXI24 a bien été annulée.'
+          void notifyClient(
+            notifiedRef.current,
+            'ride_cancelled',
+            mapRideNotificationContext({ id: item.id, ...item })
           );
 
           Alert.alert(
@@ -256,6 +230,7 @@ Prix : ${Number(item.price || 0).toLocaleString('fr-FR')} DZD`
 const isCancelled = status === 'Annulée';
 const isFinished = status === 'Terminée';
 const canCancel = ['En attente', 'Attribuée', 'Acceptée'].includes(status);
+const canRate = isFinished && !item.rating;
 const reservationId = String(item.id || '').slice(-6);
           
           return (
@@ -311,7 +286,7 @@ const reservationId = String(item.id || '').slice(-6);
                   
                 <InfoRow
   icon="cash-outline"
-  text={`${Number(item.price || 0).toLocaleString('fr-FR')} DZD`}
+  text={formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}
 />
 
 <InfoRow
@@ -359,7 +334,8 @@ const reservationId = String(item.id || '').slice(-6);
       pathname: '/course-tracking',
         params: {
         id: item.id,
-        driverId: item.driverId || 'DRV-001',
+        rideId: item.id,
+        driverId: item.driverId || '',
         address: item.address || item.departure || '',
         airport: item.airport || item.destination || '',
         time: item.time || '',
@@ -378,6 +354,26 @@ driverPhoto: item.driverPhoto || 'https://i.imgur.com/6VBx3io.png',
   <Ionicons name="navigate" size={19} color="#111" />
   <Text style={styles.trackingText}>Suivre</Text>
 </TouchableOpacity>
+                )}
+
+                {canRate && (
+                  <TouchableOpacity
+                    style={styles.rateBtn}
+                    onPress={async () => {
+                      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      router.push({
+                        pathname: '/rating',
+                        params: {
+                          rideId: item.id,
+                          driverId: item.driverId || item.ratedDriverId || '',
+                          driverName: item.driverName || 'Votre chauffeur',
+                        },
+                      });
+                    }}
+                  >
+                    <Ionicons name="star-outline" size={19} color="#111" />
+                    <Text style={styles.trackingText}>Noter</Text>
+                  </TouchableOpacity>
                 )}
               </View>
 
@@ -627,6 +623,17 @@ const styles = StyleSheet.create({
   },
 
   trackingBtn: {
+    flex: 1,
+    height: 50,
+    borderRadius: 17,
+    backgroundColor: gold,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+
+  rateBtn: {
     flex: 1,
     height: 50,
     borderRadius: 17,

@@ -3,7 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Linking,
@@ -14,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { db } from '../firebaseConfig';
 
 const gold = '#D4A017';
 const green = '#2ECC71';
@@ -39,6 +41,21 @@ export default function ReservationViewScreen() {
   );
 
   const finalPrice = isNaN(priceNumber) ? 0 : priceNumber;
+  const driverId = String(params.driverId || params.ratedDriverId || '').trim();
+  const [driverAverageRating, setDriverAverageRating] = useState(5);
+
+  useEffect(() => {
+    if (!driverId) return;
+
+    void getDoc(doc(db, 'driversLive', driverId)).then((snapshot) => {
+      if (!snapshot.exists()) return;
+
+      const liveAverage = Number(snapshot.data()?.averageRating ?? snapshot.data()?.rating);
+      if (Number.isFinite(liveAverage) && liveAverage > 0) {
+        setDriverAverageRating(liveAverage);
+      }
+    });
+  }, [driverId]);
 
   const isRoundTrip =
     params.tripType === 'retour' ||
@@ -158,7 +175,8 @@ Statut : ${status}`
       pathname: '/course-tracking',
       params: {
         id: String(params.id || ''),
-        driverId: String(params.driverId || 'DRV-001'),
+        rideId: String(params.id || ''),
+        driverId: String(params.driverId || ''),
         address: String(params.address || params.departure || ''),
         airport: String(params.airport || params.destination || ''),
         time: String(params.time || ''),
@@ -237,7 +255,7 @@ Statut : ${status}`
 
           <View style={styles.ratingBox}>
             <Ionicons name="star" size={15} color={gold} />
-            <Text style={styles.ratingText}>5.0</Text>
+            <Text style={styles.ratingText}>{driverAverageRating.toFixed(1)}</Text>
           </View>
         </View>
 

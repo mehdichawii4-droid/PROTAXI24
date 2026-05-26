@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useMemo, useState } from 'react';
 import {
@@ -26,11 +26,99 @@ const missionTypes = [
   { name: 'VIP', icon: 'diamond-outline', price: 6000 },
 ];
 
+function normalizeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
+
+function mapServiceToMissionType(service: string) {
+  if (service === 'Guide touristique') return 'VIP';
+  if (service === 'Circuit touristique') return 'Famille';
+  if (service === 'Expérience locale') return 'Personnel';
+  return 'Business';
+}
+
+function buildInitialNotes(
+  service: string,
+  circuitName: string,
+  custom?: {
+    formula?: string;
+    duration?: string;
+    steps?: string;
+    options?: string;
+    estimatedPrice?: string;
+  },
+) {
+  const lines: string[] = [];
+
+  if (service && circuitName) {
+    lines.push(`Service : ${service} — ${circuitName}`);
+  } else if (service) {
+    lines.push(`Service demandé : ${service}`);
+  }
+
+  if (custom?.formula) {
+    lines.push(`Expérience : ${custom.formula}${custom.duration ? ` (${custom.duration})` : ''}`);
+  }
+  if (custom?.steps) {
+    lines.push(`Inclus : ${custom.steps}`);
+  }
+  if (custom?.options) {
+    lines.push(`Options : ${custom.options}`);
+  }
+  if (custom?.estimatedPrice) {
+    lines.push(`Prix estimé configurateur : ${Number(custom.estimatedPrice).toLocaleString('fr-FR')} DA`);
+  }
+
+  return lines.join('\n');
+}
+
+function DiscoverSourceBadge() {
+  return (
+    <View style={styles.discoverBadge}>
+      <Ionicons name="compass-outline" size={12} color={gold} />
+      <Text style={styles.discoverBadgeText}>Depuis Découvrir Guelma</Text>
+    </View>
+  );
+}
+
 
 export default function PriseEnChargeScreen() {
-  const [missionType, setMissionType] = useState('Business');
+  const params = useLocalSearchParams<{
+    service?: string | string[];
+    circuitName?: string | string[];
+    source?: string | string[];
+    formula?: string | string[];
+    duration?: string | string[];
+    steps?: string | string[];
+    options?: string | string[];
+    estimatedPrice?: string | string[];
+  }>();
+
+  const incomingService = normalizeParam(params.service);
+  const incomingCircuitName = normalizeParam(params.circuitName);
+  const incomingSource = normalizeParam(params.source);
+  const incomingFormula = normalizeParam(params.formula);
+  const incomingDuration = normalizeParam(params.duration);
+  const incomingSteps = normalizeParam(params.steps);
+  const incomingOptions = normalizeParam(params.options);
+  const incomingEstimatedPrice = normalizeParam(params.estimatedPrice);
+  const fromDiscoverGuelma = incomingSource === 'discover-guelma';
+  const isCustomCircuit = incomingCircuitName === 'Circuit sur mesure';
+
+  const [missionType, setMissionType] = useState(() =>
+    incomingService ? mapServiceToMissionType(incomingService) : 'Business',
+  );
   const [departure, setDeparture] = useState('Guelma, Algérie');
-  const [destination, setDestination] = useState('');
+  const [destination, setDestination] = useState(() => {
+    if (isCustomCircuit && incomingSteps) {
+      return incomingSteps;
+    }
+    if (incomingCircuitName) {
+      return `${incomingCircuitName}, Guelma`;
+    }
+    return '';
+  });
   const [tripType, setTripType] = useState('Aller simple');
   const [rideMode, setRideMode] = useState('Maintenant');
   const [date, setDate] = useState('');
@@ -40,7 +128,15 @@ export default function PriseEnChargeScreen() {
   const [bags, setBags] = useState(1);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(() =>
+    buildInitialNotes(incomingService, incomingCircuitName, {
+      formula: incomingFormula,
+      duration: incomingDuration,
+      steps: incomingSteps,
+      options: incomingOptions,
+      estimatedPrice: incomingEstimatedPrice,
+    }),
+  );
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -85,7 +181,7 @@ export default function PriseEnChargeScreen() {
   router.push({
       pathname: '/prise-en-charge-summary',
       params: {
-        service: 'Prise en charge',
+        service: incomingService || 'Prise en charge',
         mode: missionType,
         airport: destination || 'Destination à confirmer',
         address: departure || 'Départ à confirmer',
@@ -98,6 +194,12 @@ export default function PriseEnChargeScreen() {
     ? 'Aller simple'
     : 'Aller-retour',
         price: String(formattedPrice).replace(' DA', '').replace(/\s/g, ''),
+        ...(incomingCircuitName ? { circuitName: incomingCircuitName } : {}),
+        ...(incomingFormula ? { formula: incomingFormula } : {}),
+        ...(incomingSteps ? { steps: incomingSteps } : {}),
+        ...(incomingOptions ? { options: incomingOptions } : {}),
+        ...(incomingEstimatedPrice ? { estimatedPrice: incomingEstimatedPrice } : {}),
+        ...(fromDiscoverGuelma ? { source: incomingSource } : {}),
       },
     });
   };
@@ -121,6 +223,8 @@ export default function PriseEnChargeScreen() {
             <Ionicons name="shield-checkmark-outline" size={26} color="#FFF" />
           </TouchableOpacity>
         </View>
+
+        {fromDiscoverGuelma ? <DiscoverSourceBadge /> : null}
 
         <ImageBackground
   source={require('../assets/images/prise-en-charge.jpg')}
@@ -517,6 +621,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginTop: 2,
+  },
+
+  discoverBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(212,160,23,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.35)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+
+  discoverBadgeText: {
+    color: gold,
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   heroCard: {

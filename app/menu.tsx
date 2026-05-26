@@ -1,11 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useState } from 'react';
 import {
-  Alert,
   Linking,
   SafeAreaView,
   ScrollView,
@@ -14,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useAuthLogout } from '@/hooks/useAuthLogout';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
@@ -21,6 +20,7 @@ const green = '#2ECC71';
 const phoneNumber = '+213671421448';
 
 export default function MenuScreen() {
+  const { confirmLogout } = useAuthLogout();
   const [notifCount, setNotifCount] = useState(0);
   const [reservationCount, setReservationCount] = useState(0);
 
@@ -46,25 +46,7 @@ export default function MenuScreen() {
   };
 
   const logout = () => {
-    Alert.alert(
-      'Déconnexion',
-      'Voulez-vous vraiment quitter votre compte ?',
-      [
-        { text: 'Non', style: 'cancel' },
-        {
-          text: 'Oui',
-          style: 'destructive',
-          onPress: async () => {
-            await AsyncStorage.removeItem('isLoggedIn');
-            await AsyncStorage.removeItem('userToken');
-            await Haptics.notificationAsync(
-              Haptics.NotificationFeedbackType.Warning
-            );
-            router.replace('/');
-          },
-        },
-      ]
-    );
+    confirmLogout();
   };
 
   return (

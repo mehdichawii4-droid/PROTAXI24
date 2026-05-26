@@ -1,22 +1,51 @@
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
+
+import CityBookingMap from '@/components/CityBookingMap';
+import CityDriverNotesModal from '@/components/CityDriverNotesModal';
+import CityRideOptionsModal from '@/components/CityRideOptionsModal';
+import CityVehicleBottomSheet, {
+  CITY_VEHICLES,
+  CityVehicleId,
+  cityVehicleExtraPrice,
+  SHEET_SNAP,
+} from '@/components/CityVehicleBottomSheet';
+import MapSelectionMode from '@/components/MapSelectionMode';
+import DestinationSearchModal, {
+  DestinationPick,
+} from '@/components/DestinationSearchModal';
+import ScheduleRideModal, {
+  formatScheduleSummary,
+  getDefaultScheduleDate,
+  getSchedulePriceExtra,
+} from '@/components/ScheduleRideModal';
+import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
+import { submitCityRide } from '@/services/cityRideService';
+import { reverseGeocodeCoordinate } from '@/utils/cityMapGeocode';
 
 const gold = '#D4A017';
+const green = '#4ADE80';
 
 const destinations = [
   { name: 'Gare routière', sub: 'Départ / arrivée', icon: 'bus', price: 500 },
@@ -27,23 +56,56 @@ const destinations = [
   { name: 'Autre destination', sub: 'Écrire manuellement', icon: 'map-marker', price: 0 },
 ];
 
-const suggestions = [
-  'Gare routière',
-  'Université',
-  'Hôpital',
-  'Centre-ville',
-  'Marché',
-];
+const BASE_CITY_FARE = 500;
+const OPTIONAL_DESTINATION_LABEL = 'À définir avec le chauffeur';
+const DEFAULT_ROUTE_ETA_MIN = 10;
 
 export default function CityScreen() {
+  const insets = useSafeAreaInsets();
+  const { profile } = useAuth();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [rideOptionsVisible, setRideOptionsVisible] = useState(false);
+  const [notesModalVisible, setNotesModalVisible] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const sheetHeightShared = useSharedValue(SHEET_SNAP.collapsed);
+  const sheetProgressShared = useSharedValue(0);
+  const mapParallaxEnabled = useSharedValue(0);
+  const [destinationModalVisible, setDestinationModalVisible] = useState(false);
+  const [mapSelectionMode, setMapSelectionMode] = useState(false);
+  const [pickupCoordinate, setPickupCoordinate] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [selectionCenter, setSelectionCenter] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [liveAddress, setLiveAddress] = useState('Détection en cours…');
+  const [isMapDragging, setIsMapDragging] = useState(false);
+  const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const [routePreview, setRoutePreview] = useState<{
+    origin: { latitude: number; longitude: number };
+    destination: { latitude: number; longitude: number };
+  } | null>(null);
+  const [routeMetrics, setRouteMetrics] = useState<{
+    distanceKm: number;
+    etaMin: number;
+  } | null>(null);
+  const cityMapRef = useRef<{ fitRoute: () => void } | null>(null);
+  const geocodeRequestRef = useRef(0);
+  const geocodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [bookingReady, setBookingReady] = useState(false);
+  const [destinationPrice, setDestinationPrice] = useState<number | null>(null);
+  const [vehicleType, setVehicleType] = useState<CityVehicleId>('Berline');
   const [destinationType, setDestinationType] = useState('Gare routière');
   const [customDestination, setCustomDestination] = useState('');
   const [pickup, setPickup] = useState('Ma position actuelle, Guelma');
   const [destinationAddress, setDestinationAddress] = useState('');
-  const [rideMode, setRideMode] = useState<'Maintenant' | 'Réserver plus tard'>('Maintenant');
-  const [date, setDate] = useState(new Date());
-  const [showDate, setShowDate] = useState(false);
-  const [showTime, setShowTime] = useState(false);
+  const [timingMode, setTimingMode] = useState<'now' | 'later'>('now');
+  const [timingConfirmed, setTimingConfirmed] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
+  const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
+  const [date, setDate] = useState(getDefaultScheduleDate());
   const [waitingTime, setWaitingTime] = useState(0);
   const [passengers, setPassengers] = useState(1);
   const [bags, setBags] = useState(0);
@@ -61,1005 +123,1223 @@ export default function CityScreen() {
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-
-      if (status !== 'granted') {
-        return;
-      }
+      if (status !== 'granted') return;
 
       const location = await Location.getCurrentPositionAsync({});
-
       setRegion({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
       });
+      setPickupCoordinate({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
     })();
   }, []);
 
-  const selectedDestination = destinations.find(
-    (item) => item.name === destinationType
-  );
+  useEffect(() => {
+    if (profile?.fullName && !fullName.trim()) {
+      setFullName(profile.fullName);
+    }
+    if (profile?.phone && !phone.trim()) {
+      setPhone(profile.phone);
+    }
+  }, [profile, fullName, phone]);
 
-  const finalDestination =
-    destinationType === 'Autre destination'
-      ? customDestination || 'Destination à préciser'
-      : destinationAddress || destinationType;
+  const selectedDestination = destinations.find((item) => item.name === destinationType);
+
+  const hasDestination = Boolean(destinationAddress.trim());
+
+  const finalDestination = hasDestination
+    ? destinationType === 'Autre destination'
+      ? customDestination || destinationAddress || 'Destination à préciser'
+      : destinationAddress || destinationType
+    : OPTIONAL_DESTINATION_LABEL;
+
+  const rideMode = timingMode === 'now' ? 'Maintenant' : 'Réserver plus tard';
+  const activeSchedule = timingMode === 'later' ? scheduledAt : null;
+
+  const baseEtaMin = routeMetrics?.etaMin ?? DEFAULT_ROUTE_ETA_MIN;
+
+  const fareBase = useMemo(() => {
+    return hasDestination
+      ? destinationPrice ?? selectedDestination?.price ?? 0
+      : BASE_CITY_FARE;
+  }, [hasDestination, destinationPrice, selectedDestination]);
 
   const estimatedPrice = useMemo(() => {
-    const base = selectedDestination?.price || 0;
     const waitPrice = waitingTime * 30;
-    return base + waitPrice;
-  }, [selectedDestination, waitingTime]);
+    const scheduleExtra = getSchedulePriceExtra(activeSchedule, timingMode === 'later');
+    return fareBase + waitPrice + scheduleExtra + cityVehicleExtraPrice(vehicleType);
+  }, [fareBase, waitingTime, vehicleType, activeSchedule, timingMode]);
+
+  const vehiclePrices = useMemo(() => {
+    const waitPrice = waitingTime * 30;
+    const scheduleExtra = getSchedulePriceExtra(activeSchedule, timingMode === 'later');
+    const shared = fareBase + waitPrice + scheduleExtra;
+    return Object.fromEntries(
+      CITY_VEHICLES.map((option) => [option.id, shared + option.extraPrice]),
+    ) as Record<CityVehicleId, number>;
+  }, [fareBase, waitingTime, activeSchedule, timingMode]);
 
   const formattedPrice =
     estimatedPrice > 0
       ? `${estimatedPrice.toLocaleString('fr-FR')} DA`
       : 'Sur confirmation';
 
+  const panelBottomInset = Math.max(insets.bottom, 6) + 4;
+  const selectionBottomInset = Math.max(insets.bottom, 12);
+  const showVehicleStep =
+    timingConfirmed && (timingMode === 'now' || Boolean(scheduledAt));
+
+  useEffect(() => {
+    mapParallaxEnabled.value = showVehicleStep && !mapSelectionMode ? 1 : 0;
+  }, [showVehicleStep, mapSelectionMode, mapParallaxEnabled]);
+
+  const closeVehicleSheet = useCallback(() => {
+    setTimingConfirmed(false);
+    setTermsAccepted(false);
+    mapParallaxEnabled.value = 0;
+    sheetHeightShared.value = SHEET_SNAP.collapsed;
+    sheetProgressShared.value = 0;
+  }, [mapParallaxEnabled, sheetHeightShared, sheetProgressShared]);
+
+  const mapWrapAnimatedStyle = useAnimatedStyle(() => {
+    const active = mapParallaxEnabled.value;
+    const progress = sheetProgressShared.value;
+    return {
+      bottom: active * sheetHeightShared.value,
+      transform: [
+        {
+          translateY: active * interpolate(progress, [0, 1], [0, -26], Extrapolation.CLAMP),
+        },
+        {
+          scale: interpolate(
+            active * progress,
+            [0, 1],
+            [1, 0.93],
+            Extrapolation.CLAMP,
+          ),
+        },
+      ],
+    };
+  });
+
   const useMyLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
-
     if (status !== 'granted') {
       Alert.alert('Permission refusée', 'Veuillez autoriser la localisation.');
       return;
     }
 
     const location = await Location.getCurrentPositionAsync({});
-
     setRegion({
       latitude: location.coords.latitude,
       longitude: location.coords.longitude,
       latitudeDelta: 0.02,
       longitudeDelta: 0.02,
     });
-
     setPickup('Ma position actuelle');
+    setPickupCoordinate({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    });
   };
 
-  const confirmCity = () => {
-    if (!destinationAddress || !fullName || !phone) {
-  Alert.alert(
-    'Informations manquantes',
-    'Veuillez remplir la destination, le nom et le téléphone.'
+  const applyRoutePreview = useCallback(
+    (destination: { latitude: number; longitude: number }) => {
+      const origin = pickupCoordinate ?? {
+        latitude: region.latitude,
+        longitude: region.longitude,
+      };
+      setRoutePreview({
+        origin,
+        destination,
+      });
+      setRouteMetrics(null);
+    },
+    [pickupCoordinate, region.latitude, region.longitude],
   );
-  return;
-}
+
+  const resolveLiveAddress = useCallback(async (coordinate: { latitude: number; longitude: number }) => {
+    const requestId = ++geocodeRequestRef.current;
+    setIsResolvingAddress(true);
+    try {
+      const label = await reverseGeocodeCoordinate(coordinate);
+      if (requestId !== geocodeRequestRef.current) return;
+      setLiveAddress(label);
+    } catch {
+      if (requestId !== geocodeRequestRef.current) return;
+      setLiveAddress(`${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`);
+    } finally {
+      if (requestId === geocodeRequestRef.current) {
+        setIsResolvingAddress(false);
+      }
+    }
+  }, []);
+
+  const scheduleLiveAddressLookup = useCallback(
+    (coordinate: { latitude: number; longitude: number }) => {
+      if (geocodeTimerRef.current) {
+        clearTimeout(geocodeTimerRef.current);
+      }
+      geocodeTimerRef.current = setTimeout(() => {
+        resolveLiveAddress(coordinate);
+      }, 260);
+    },
+    [resolveLiveAddress],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (geocodeTimerRef.current) clearTimeout(geocodeTimerRef.current);
+    };
+  }, []);
+
+  const handleDestinationSelect = useCallback((pick: DestinationPick) => {
+    const label = String(pick?.label ?? '').trim();
+    if (!label) return;
+
+    setDestinationAddress(label);
+    setDestinationPrice(pick.price);
+    setBookingReady(true);
+    setMapSelectionMode(false);
+    setTimingConfirmed(false);
+    setTimingMode('now');
+    setScheduledAt(null);
+    setTermsAccepted(false);
+
+    applyRoutePreview({ latitude: pick.latitude, longitude: pick.longitude });
+
+    if (pick.destinationType) {
+      setDestinationType(pick.destinationType);
+      setCustomDestination('');
+    } else if (pick.price >= 4000) {
+      setDestinationType('Autre destination');
+      setCustomDestination(label);
+    } else {
+      setDestinationType('Autre destination');
+      setCustomDestination('');
+    }
+
+    const isLongTrip = pick.price >= 4000;
+    setRegion({
+      latitude: pick.latitude,
+      longitude: pick.longitude,
+      latitudeDelta: isLongTrip ? 0.85 : 0.025,
+      longitudeDelta: isLongTrip ? 0.85 : 0.025,
+    });
+
+    setDestinationModalVisible(false);
+  }, [applyRoutePreview]);
+
+  const confirmCity = async () => {
+    if (!termsAccepted) {
+      Alert.alert('Conditions requises', 'Veuillez accepter les conditions générales d’utilisation.');
+      return;
+    }
+    if (!fullName.trim() || !phone.trim()) {
+      Alert.alert(
+        'Informations manquantes',
+        'Veuillez renseigner votre nom et votre téléphone.',
+      );
+      setRideOptionsVisible(true);
+      return;
+    }
     if (!pickup.trim()) {
       Alert.alert('Départ manquant', 'Veuillez saisir un lieu de départ.');
       return;
     }
-
-    if (destinationType === 'Autre destination' && !customDestination.trim()) {
-      Alert.alert('Destination manquante', 'Veuillez écrire votre destination.');
+    if (timingMode === 'later' && !scheduledAt) {
+      Alert.alert('Horaire manquant', 'Choisissez une date et une heure pour votre course.');
+      setScheduleModalVisible(true);
       return;
     }
+    if (isSubmitting) return;
 
-    router.push({
-      pathname: '/city-summary',
-      params: {
-        service: 'Ville 24H',
-        destinationType,
-        departure: pickup,
-        destination: finalDestination,
-        rideMode,
-        date:
-          rideMode === 'Réserver plus tard'
-            ? date.toLocaleDateString('fr-FR')
-            : 'Maintenant',
-        time:
-          rideMode === 'Réserver plus tard'
-            ? date.toLocaleTimeString('fr-FR', {
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            : 'Maintenant',
-        waitingTime: `${waitingTime} min`,
-        passengers: `${passengers} passager${passengers > 1 ? 's' : ''}`,
-        bags: `${bags} bagage${bags > 1 ? 's' : ''}`,
-        fullName: fullName || 'Client PROTAXI',
-        phone: phone || 'Non renseigné',
-        notes: notes || 'Aucune note',
-        price: formattedPrice,
-      },
+    const bookingDate = timingMode === 'later' && scheduledAt ? scheduledAt : new Date();
+
+    setIsSubmitting(true);
+    try {
+      const result = await submitCityRide(
+        {
+          service: 'Ville 24H',
+          destinationType,
+          departure: pickup,
+          destination: finalDestination,
+          rideMode,
+          date:
+            rideMode === 'Réserver plus tard'
+              ? bookingDate.toLocaleDateString('fr-FR')
+              : 'Maintenant',
+          time:
+            rideMode === 'Réserver plus tard'
+              ? bookingDate.toLocaleTimeString('fr-FR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : 'Maintenant',
+          waitingTime: `${waitingTime} min`,
+          passengers: `${passengers} passager${passengers > 1 ? 's' : ''}`,
+          bags: `${bags} bagage${bags > 1 ? 's' : ''}`,
+          fullName: fullName || 'Client PROTAXI',
+          phone: phone || 'Non renseigné',
+          notes: notes || 'Aucune note',
+          price: formattedPrice,
+        },
+        {
+          clientUid: getFirebaseAuth().currentUser?.uid,
+          profileFullName: profile?.fullName,
+          profilePhone: profile?.phone,
+        },
+      );
+
+      if (result.status === 'auth_required') {
+        Alert.alert(
+          'Connexion requise',
+          'Connectez-vous pour réserver une course taxi PROTAXI.',
+        );
+        return;
+      }
+      if (result.status === 'missing_ride_id') {
+        Alert.alert(
+          'Erreur',
+          'Impossible d’obtenir l’identifiant de la course. Veuillez réessayer.',
+        );
+        return;
+      }
+      if (result.status === 'error') {
+        Alert.alert('Erreur', 'Impossible d’enregistrer la course. Veuillez réessayer.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleScheduleConfirm = (picked: Date) => {
+    setScheduledAt(picked);
+    setDate(picked);
+    setScheduleModalVisible(false);
+    setTermsAccepted(false);
+    setTimingConfirmed(true);
+  };
+
+  const handleSelectNow = () => {
+    setTimingMode('now');
+    setScheduledAt(null);
+    setScheduleModalVisible(false);
+    setTermsAccepted(false);
+    setTimingConfirmed(true);
+  };
+
+  const handleSelectLater = () => {
+    setTimingMode('later');
+    setTimingConfirmed(false);
+    setScheduleModalVisible(true);
+  };
+
+  const handleCommanderPress = () => {
+    confirmCity();
+  };
+
+  const handleSelectOnMap = () => {
+    setDestinationModalVisible(false);
+    setRoutePreview(null);
+    setRouteMetrics(null);
+    const center = {
+      latitude: region.latitude,
+      longitude: region.longitude,
+    };
+    setSelectionCenter(center);
+    setLiveAddress('Détection en cours…');
+    setMapSelectionMode(true);
+    resolveLiveAddress(center);
+  };
+
+  const handleSelectionRegionChange = useCallback(
+    (nextRegion: typeof region, dragging: boolean) => {
+      const center = {
+        latitude: nextRegion.latitude,
+        longitude: nextRegion.longitude,
+      };
+      setSelectionCenter(center);
+      setIsMapDragging(dragging);
+      scheduleLiveAddressLookup(center);
+    },
+    [scheduleLiveAddressLookup],
+  );
+
+  const handleValidateMapPoint = () => {
+    if (!selectionCenter) return;
+
+    const label = liveAddress.trim() || 'Adresse sélectionnée sur la carte';
+    handleDestinationSelect({
+      id: `map-${selectionCenter.latitude}-${selectionCenter.longitude}`,
+      label,
+      subtitle: 'Sélection sur la carte',
+      latitude: selectionCenter.latitude,
+      longitude: selectionCenter.longitude,
+      price: 700,
+      icon: 'location-outline',
     });
   };
 
-  const openDatePicker = () => {
-    setShowDate(!showDate);
-    setShowTime(false);
-  };
-
-  const openTimePicker = () => {
-    setShowTime(!showTime);
-    setShowDate(false);
+  const cancelMapSelection = () => {
+    setMapSelectionMode(false);
+    setIsMapDragging(false);
+    geocodeRequestRef.current += 1;
+    if (geocodeTimerRef.current) clearTimeout(geocodeTimerRef.current);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar style="light" />
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scroll}
-      >
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={26} color="#FFF" />
-          </TouchableOpacity>
-
-          <View>
-            <Text style={styles.title}>VILLE 24H</Text>
-            <Text style={styles.subtitle}>Service urbain premium</Text>
-          </View>
-
-          <TouchableOpacity style={styles.helpBtn}>
-            <Ionicons name="help-circle-outline" size={26} color="#FFF" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.mapContainer}>
-          <MapView style={styles.map} region={region}>
-            <Marker coordinate={region} title="Position actuelle" />
-          </MapView>
-        </View>
-
-        <View style={styles.infoBox}>
-          <Ionicons name="information-circle-outline" size={23} color={gold} />
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.infoTitle}>Course en ville rapide et privée</Text>
-            <Text style={styles.infoText}>
-              Choisissez votre destination, indiquez votre point de départ et
-              confirmez votre demande en quelques secondes.
-            </Text>
-          </View>
-        </View>
-
-        <SectionTitle text="1. Destination" />
-
-        <InputBox
-          icon="search-outline"
-          placeholder="Où souhaitez-vous aller ? Ex : Gare, hôpital..."
-          value={destinationAddress}
-          onChangeText={setDestinationAddress}
-        />
-
-        <SuggestionRow items={suggestions} onSelect={setDestinationAddress} />
-        <View style={{ marginTop: 10 }}>
-  <InputBox
-    icon="location-outline"
-    placeholder="Adresse exacte de destination"
-    value={destinationAddress}
-    onChangeText={setDestinationAddress}
-  />
-</View>
-
-        <View style={styles.grid}>
-          {destinations.map((item) => (
-            <TouchableOpacity
-              key={item.name}
-              style={[
-                styles.destCard,
-                destinationType === item.name && styles.destCardActive,
-              ]}
-              onPress={() => setDestinationType(item.name)}
-            >
-              <View style={styles.destIcon}>
-                <MaterialCommunityIcons
-                  name={item.icon as any}
-                  size={25}
-                  color={gold}
-                />
-              </View>
-
-              <Text
-                numberOfLines={2}
-                style={[
-                  styles.destName,
-                  destinationType === item.name && styles.destNameActive,
-                ]}
-              >
-                {item.name}
-              </Text>
-
-              <Text numberOfLines={1} style={styles.destSub}>
-                {item.sub}
-              </Text>
-
-              {destinationType === item.name && (
-                <View style={styles.checkCircle}>
-                  <Ionicons name="checkmark" size={15} color="#111" />
-                </View>
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {destinationType === 'Autre destination' && (
-          <View style={{ marginTop: 10 }}>
-            <InputBox
-              icon="map-outline"
-              placeholder="Écrire votre destination"
-              value={customDestination}
-              onChangeText={setCustomDestination}
-            />
-          </View>
-        )}
-
-        <SectionTitle text="2. Lieu de prise en charge" />
-
-        <InputBox
-          icon="home-outline"
-          placeholder="Adresse de départ"
-          value={pickup}
-          onChangeText={setPickup}
-          rightIcon="locate-outline"
-          onRightPress={useMyLocation}
-        />
-
-        <TouchableOpacity style={styles.locationBtn} onPress={useMyLocation}>
-          <Ionicons name="navigate" size={20} color={gold} />
-          <Text style={styles.locationText}>Utiliser ma position actuelle</Text>
-        </TouchableOpacity>
-
-        <SectionTitle text="3. Type de course" />
-
-        <View style={styles.modeRow}>
-          <TouchableOpacity
-            style={[
-              styles.modeCard,
-              rideMode === 'Maintenant' && styles.modeActive,
-            ]}
-            onPress={() => setRideMode('Maintenant')}
-          >
-            <Ionicons
-              name="flash-outline"
-              size={24}
-              color={rideMode === 'Maintenant' ? '#111' : gold}
-            />
-            <Text
-              style={[
-                styles.modeText,
-                rideMode === 'Maintenant' && styles.modeTextActive,
-              ]}
-            >
-              Maintenant
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.modeCard,
-              rideMode === 'Réserver plus tard' && styles.modeActive,
-            ]}
-            onPress={() => setRideMode('Réserver plus tard')}
-          >
-            <Ionicons
-              name="calendar-outline"
-              size={24}
-              color={rideMode === 'Réserver plus tard' ? '#111' : gold}
-            />
-            <Text
-              style={[
-                styles.modeText,
-                rideMode === 'Réserver plus tard' && styles.modeTextActive,
-              ]}
-            >
-              Réserver
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {rideMode === 'Réserver plus tard' && (
-          <>
-            <SectionTitle text="4. Date et heure" />
-            <DateTimeBoxes
-              date={date}
-              openDatePicker={openDatePicker}
-              openTimePicker={openTimePicker}
-            />
-          </>
-        )}
-
-        {showDate && (
-          <View style={styles.pickerBox}>
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display="spinner"
-              minimumDate={new Date()}
-              onChange={(event, selectedDate) => {
-                if (selectedDate) setDate(selectedDate);
-              }}
-            />
-
-            <TouchableOpacity
-              style={styles.closePickerBtn}
-              onPress={() => setShowDate(false)}
-            >
-              <Text style={styles.closePickerText}>Valider la date</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {showTime && (
-          <View style={styles.pickerBox}>
-            <DateTimePicker
-              value={date}
-              mode="time"
-              display="spinner"
-              is24Hour
-              onChange={(event, selectedDate) => {
-                if (selectedDate) setDate(selectedDate);
-              }}
-            />
-
-            <TouchableOpacity
-              style={styles.closePickerBtn}
-              onPress={() => setShowTime(false)}
-            >
-              <Text style={styles.closePickerText}>Valider l’heure</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <SectionTitle text="5. Passagers, bagages et attente" />
-
-        <CounterBox
-          icon="people-outline"
-          label="Passagers"
-          value={passengers}
-          setValue={setPassengers}
-          min={1}
-        />
-
-        <CounterBox
-          icon="briefcase-outline"
-          label="Bagages"
-          value={bags}
-          setValue={setBags}
-          min={0}
-        />
-
-        <CounterBox
-          icon="time-outline"
-          label="Attente"
-          value={waitingTime}
-          setValue={setWaitingTime}
-          min={0}
-          step={15}
-          suffix=" min"
-        />
-
-        <SectionTitle text="6. Coordonnées client" />
-
-        <InputBox
-          icon="person-outline"
-          placeholder="Nom complet"
-          value={fullName}
-          onChangeText={setFullName}
-        />
-
-        <View style={{ height: 10 }} />
-
-        <InputBox
-          icon="call-outline"
-          placeholder="Téléphone"
-          value={phone}
-          onChangeText={setPhone}
-          keyboardType="phone-pad"
-        />
-
-        <View style={styles.noteBox}>
-          <Ionicons name="chatbox-ellipses-outline" size={23} color={gold} />
-          <TextInput
-            placeholder="Notes : étage, urgence, arrêt rapide..."
-            placeholderTextColor="#888"
-            value={notes}
-            onChangeText={setNotes}
-            style={styles.noteInput}
-            multiline
-            maxLength={200}
+      <View style={styles.screenBody}>
+        <Animated.View style={[styles.mapWrap, mapWrapAnimatedStyle]}>
+          <CityBookingMap
+            mapRef={cityMapRef}
+            mapStyle={styles.map}
+            region={region}
+            pickupCoordinate={pickupCoordinate}
+            markerTitle="Vous"
+            selectionMode={mapSelectionMode}
+            onSelectionRegionChange={handleSelectionRegionChange}
+            routePreview={mapSelectionMode ? null : routePreview}
+            onRouteMetrics={setRouteMetrics}
           />
-        </View>
+        </Animated.View>
 
-        <Text style={styles.counterChars}>{notes.length}/200</Text>
+        <MapSelectionMode
+          visible={mapSelectionMode}
+          liveAddress={liveAddress}
+          isDragging={isMapDragging}
+          isResolvingAddress={isResolvingAddress}
+          bottomInset={selectionBottomInset}
+          onCancel={cancelMapSelection}
+          onValidate={handleValidateMapPoint}
+        />
 
-        <View style={styles.priceBox}>
-          <View style={styles.priceTop}>
-            <Text style={styles.priceLabel}>Prix estimé</Text>
-            <Ionicons name="information-circle-outline" size={22} color="#FFF" />
+        {!mapSelectionMode && routeMetrics ? (
+          <View style={[styles.routeMetricsChip, { top: insets.top + 56 }]}>
+            <Ionicons name="navigate" size={16} color={green} />
+            <Text style={styles.routeMetricsText}>
+              {routeMetrics.etaMin} min · {routeMetrics.distanceKm} km
+            </Text>
           </View>
+        ) : null}
 
-          <Text style={styles.price}>{formattedPrice}</Text>
+        {!mapSelectionMode && !showVehicleStep ? (
+          <LinearGradient
+            colors={['transparent', 'rgba(5,5,5,0.35)', 'rgba(5,5,5,0.88)']}
+            style={styles.mapBottomFade}
+            pointerEvents="none"
+          />
+        ) : null}
 
-          <Text style={styles.priceSub}>
-            Paiement à la fin du trajet • Tarif confirmé avant départ
-          </Text>
-        </View>
+        {!mapSelectionMode ? (
+          <View
+            style={[styles.floatingHeader, { top: insets.top + 8 }]}
+            pointerEvents="box-none"
+          >
+            <TouchableOpacity
+              style={styles.compactBtn}
+              onPress={() => {
+                if (showVehicleStep) {
+                  closeVehicleSheet();
+                  return;
+                }
+                router.back();
+              }}
+            >
+              <Ionicons name="chevron-back" size={20} color="#FFF" />
+            </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.mainBtn}
-          activeOpacity={0.9}
-          onPress={confirmCity}
-        >
-          <Text style={styles.mainBtnText}>Continuer</Text>
+            <View style={styles.headerPill}>
+              <Text style={styles.headerLogo} numberOfLines={1}>
+                <Text style={{ color: gold }}>VILLE</Text> 24H
+              </Text>
+              <Text style={styles.headerStatus} numberOfLines={1}>
+                Réservation live
+              </Text>
+            </View>
 
-          <View style={styles.mainBtnIcon}>
-            <Ionicons name="arrow-forward" size={25} color="#FFF" />
+            <TouchableOpacity style={styles.compactBtn} onPress={useMyLocation}>
+              <Ionicons name="locate" size={18} color={gold} />
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        ) : null}
 
-        <View style={styles.bottomInfo}>
-          <InfoItem icon="shield-checkmark-outline" text="Course sécurisée" />
-          <InfoItem icon="time-outline" text="Disponible 24h/24" />
-          <InfoItem icon="cash-outline" text="Prix clair avant départ" />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+        {!mapSelectionMode && !showVehicleStep ? (
+          <View style={[styles.bottomPanel, { paddingBottom: panelBottomInset }]}>
+            <View style={styles.handle} />
+
+            <View style={styles.routeBlock}>
+              <RouteField
+                dotColor="#4ADE80"
+                icon="radio-button-on"
+                placeholder="Point de départ"
+                value={pickup}
+                onChangeText={setPickup}
+              />
+              <View style={styles.routeDivider} />
+              <DestinationField
+                value={destinationAddress}
+                onPress={() => setDestinationModalVisible(true)}
+              />
+            </View>
+
+            <View style={styles.timingSection}>
+              <TimingSegmentedControl
+                mode={timingMode}
+                confirmed={timingConfirmed}
+                onSelectNow={handleSelectNow}
+                onSelectLater={handleSelectLater}
+              />
+
+              {timingMode === 'later' && scheduledAt ? (
+                <TouchableOpacity
+                  style={styles.scheduleSummary}
+                  onPress={() => setScheduleModalVisible(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.scheduleSummaryText}>
+                    📅 {formatScheduleSummary(scheduledAt)}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={green} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {!mapSelectionMode && showVehicleStep ? (
+          <CityVehicleBottomSheet
+            visible={showVehicleStep}
+            selectedVehicle={vehicleType}
+            onSelectVehicle={setVehicleType}
+            baseEtaMin={baseEtaMin}
+            vehiclePrices={vehiclePrices}
+            passengersLabel={`${passengers} passager${passengers > 1 ? 's' : ''}`}
+            paymentLabel="A bord (Espèces/CB)"
+            notesPreview={notes.trim() ? 'Consignes ajoutées' : 'Consignes chauffeur'}
+            termsAccepted={termsAccepted}
+            onToggleTerms={() => setTermsAccepted((prev) => !prev)}
+            onOpenPassengers={() => setRideOptionsVisible(true)}
+            onOpenOptions={() => setRideOptionsVisible(true)}
+            onOpenPayment={() =>
+              Alert.alert('Paiement', 'Règlement à bord en espèces ou par carte bancaire.')
+            }
+            onOpenNotes={() => setNotesModalVisible(true)}
+            isSubmitting={isSubmitting}
+            onCommander={handleCommanderPress}
+            bottomInset={panelBottomInset}
+            sheetHeightShared={sheetHeightShared}
+            sheetProgressShared={sheetProgressShared}
+          />
+        ) : null}
+      </View>
+
+      <DestinationSearchModal
+        visible={destinationModalVisible}
+        onClose={() => setDestinationModalVisible(false)}
+        onSelectDestination={handleDestinationSelect}
+        onSelectOnMap={handleSelectOnMap}
+        initialQuery={destinationAddress}
+      />
+
+      <ScheduleRideModal
+        visible={scheduleModalVisible}
+        initialDate={scheduledAt ?? date}
+        onClose={() => setScheduleModalVisible(false)}
+        onConfirm={handleScheduleConfirm}
+      />
+
+      <CityRideOptionsModal
+        visible={rideOptionsVisible}
+        onClose={() => setRideOptionsVisible(false)}
+        passengers={passengers}
+        setPassengers={setPassengers}
+        bags={bags}
+        setBags={setBags}
+        waitingTime={waitingTime}
+        setWaitingTime={setWaitingTime}
+        fullName={fullName}
+        setFullName={setFullName}
+        phone={phone}
+        setPhone={setPhone}
+      />
+
+      <CityDriverNotesModal
+        visible={notesModalVisible}
+        notes={notes}
+        onChangeNotes={setNotes}
+        onClose={() => setNotesModalVisible(false)}
+      />
+    </View>
   );
 }
 
-function DateTimeBoxes({ date, openDatePicker, openTimePicker }: any) {
-  return (
-    <View style={styles.twoCols}>
-      <TouchableOpacity style={styles.smallBox} onPress={openDatePicker}>
-        <Ionicons name="calendar-outline" size={23} color={gold} />
+function TimingSegmentedControl({
+  mode,
+  confirmed,
+  onSelectNow,
+  onSelectLater,
+}: {
+  mode: 'now' | 'later';
+  confirmed: boolean;
+  onSelectNow: () => void;
+  onSelectLater: () => void;
+}) {
+  const nowActive = confirmed && mode === 'now';
+  const laterActive = confirmed && mode === 'later';
 
-        <View>
-          <Text style={styles.smallBoxLabel}>Date</Text>
-          <Text style={styles.smallBoxValue}>
-            {date.toLocaleDateString('fr-FR')}
-          </Text>
-        </View>
+  return (
+    <View style={styles.timingRow}>
+      <TouchableOpacity
+        style={[
+          styles.timingButton,
+          nowActive ? styles.timingButtonActive : styles.timingButtonInactive,
+        ]}
+        onPress={onSelectNow}
+        activeOpacity={0.72}
+      >
+        <Ionicons name="flash-outline" size={17} color={nowActive ? '#111' : green} />
+        <Text style={[styles.timingButtonText, nowActive && styles.timingButtonTextActive]}>
+          Maintenant
+        </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.smallBox} onPress={openTimePicker}>
-        <Ionicons name="time-outline" size={23} color={gold} />
-
-        <View>
-          <Text style={styles.smallBoxLabel}>Heure</Text>
-          <Text style={styles.smallBoxValue}>
-            {date.toLocaleTimeString('fr-FR', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </Text>
-        </View>
+      <TouchableOpacity
+        style={[
+          styles.timingButton,
+          laterActive ? styles.timingButtonActive : styles.timingButtonInactive,
+        ]}
+        onPress={onSelectLater}
+        activeOpacity={0.72}
+      >
+        <Ionicons name="calendar-outline" size={17} color={laterActive ? '#111' : green} />
+        <Text style={[styles.timingButtonText, laterActive && styles.timingButtonTextActive]}>
+          Plus tard
+        </Text>
       </TouchableOpacity>
     </View>
   );
 }
 
-function SectionTitle({ text }: { text: string }) {
-  return <Text style={styles.sectionTitle}>{text}</Text>;
+function DestinationField({ value, onPress }: { value: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={[styles.routeField, styles.destinationFieldCompact]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <View style={[styles.routeDot, { backgroundColor: gold }]} />
+      <Ionicons name="flag" size={16} color={gold} />
+      <Text
+        style={[styles.destinationText, !value && styles.routePlaceholder]}
+        numberOfLines={1}
+      >
+        {value || 'Destination / Estimation (facultatif)'}
+      </Text>
+      <Ionicons name="search" size={18} color={green} />
+    </TouchableOpacity>
+  );
 }
 
-function InputBox({
+function RouteField({
+  dotColor,
   icon,
   placeholder,
   value,
   onChangeText,
-  rightIcon,
-  onRightPress,
   keyboardType = 'default',
-}: any) {
+}: {
+  dotColor: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  placeholder: string;
+  value: string;
+  onChangeText: (text: string) => void;
+  keyboardType?: 'default' | 'phone-pad';
+}) {
   return (
-    <View style={styles.inputBox}>
-      <Ionicons name={icon} size={23} color={gold} />
-
+    <View style={styles.routeField}>
+      <View style={[styles.routeDot, { backgroundColor: dotColor }]} />
+      <Ionicons name={icon} size={16} color={gold} />
       <TextInput
         placeholder={placeholder}
-        placeholderTextColor="#888"
+        placeholderTextColor="#666"
         value={value}
         onChangeText={onChangeText}
         keyboardType={keyboardType}
-        style={styles.input}
+        style={styles.routeInput}
       />
-
-      {rightIcon && (
-        <TouchableOpacity onPress={onRightPress}>
-          <Ionicons name={rightIcon} size={24} color="#FFF" />
-        </TouchableOpacity>
-      )}
-    </View>
-  );
-}
-
-function SuggestionRow({ items, onSelect }: any) {
-  return (
-    <View style={styles.suggestionWrap}>
-      {items.map((item: string) => (
-        <TouchableOpacity
-          key={item}
-          style={styles.suggestion}
-          onPress={() => onSelect(item)}
-        >
-          <Text style={styles.suggestionText}>{item}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
-
-function CounterBox({
-  icon,
-  label,
-  value,
-  setValue,
-  min = 1,
-  step = 1,
-  suffix = '',
-}: any) {
-  return (
-    <View style={styles.counterBox}>
-      <Ionicons name={icon} size={24} color={gold} />
-
-      <Text style={styles.counterLabel}>{label}</Text>
-
-      <TouchableOpacity
-        style={styles.counterBtn}
-        onPress={() => setValue(Math.max(min, value - step))}
-      >
-        <Ionicons name="remove" size={21} color="#FFF" />
-      </TouchableOpacity>
-
-      <Text style={styles.counterValue}>
-        {value}
-        {suffix}
-      </Text>
-
-      <TouchableOpacity
-        style={styles.counterBtn}
-        onPress={() => setValue(value + step)}
-      >
-        <Ionicons name="add" size={21} color="#FFF" />
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function InfoItem({ icon, text }: any) {
-  return (
-    <View style={styles.infoItem}>
-      <Ionicons name={icon} size={22} color={gold} />
-      <Text style={styles.infoItemText}>{text}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#050505' },
-  scroll: { paddingHorizontal: 18, paddingBottom: 35 },
-
-  header: {
-    paddingTop: 20,
-    marginBottom: 18,
+  container: {
+    flex: 1,
+    backgroundColor: '#050505',
+    overflow: 'hidden',
+  },
+  screenBody: {
+    flex: 1,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  mapWrap: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapBottomFade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 160,
+  },
+  routeMetricsChip: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(8,8,8,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.35)',
+  },
+  routeMetricsText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  floatingHeader: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 10,
+  },
+  compactBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(8,8,8,0.62)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.35,
+        shadowRadius: 10,
+      },
+      android: { elevation: 8 },
+    }),
+  },
+  headerPill: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(8,8,8,0.62)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.22)',
+  },
+  headerLogo: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  headerStatus: {
+    color: 'rgba(212,160,23,0.95)',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  bottomPanel: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 20,
+    flexDirection: 'column',
+    backgroundColor: '#0A0A0A',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderColor: 'rgba(212,160,23,0.18)',
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -10 },
+        shadowOpacity: 0.5,
+        shadowRadius: 20,
+      },
+      android: { elevation: 22 },
+    }),
+  },
+  handle: {
+    width: 40,
+    height: 4,
+    borderRadius: 4,
+    backgroundColor: '#333',
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  routeBlock: {
+    width: '100%',
+    flexShrink: 0,
+    gap: 0,
+    marginBottom: 4,
+  },
+  routeDivider: {
+    width: 1,
+    height: 10,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginLeft: 14,
+  },
+  destinationFieldCompact: {
+    minHeight: 44,
+    maxHeight: 44,
+  },
+  destinationText: {
+    flex: 1,
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+    paddingVertical: 0,
+  },
+  timingSection: {
+    width: '100%',
+    gap: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  vehicleExpandWrapper: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginVertical: 10,
+  },
+  sectionTitle: {
+    color: '#888',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  vehicleSection: {
+    width: '100%',
+    gap: 8,
+  },
+  vehicleListCard: {
+    minHeight: 58,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-
-  backBtn: {
-    width: 42,
-    height: 42,
-    justifyContent: 'center',
+  vehicleListCardActive: {
+    backgroundColor: 'rgba(74,222,128,0.14)',
+    borderColor: green,
   },
-
-  helpBtn: {
-    width: 42,
-    height: 42,
-    justifyContent: 'center',
-    alignItems: 'flex-end',
-  },
-
-  title: {
-    color: '#FFF',
-    fontSize: 25,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-
-  subtitle: {
-    color: '#BEBEBE',
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 2,
-  },
-
-  mapContainer: {
-    height: 220,
-    borderRadius: 24,
-    overflow: 'hidden',
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.35)',
-  },
-
-  map: { flex: 1 },
-
-  infoBox: {
-    flexDirection: 'row',
-    gap: 10,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: gold,
-    backgroundColor: 'rgba(212,160,23,0.08)',
-    padding: 15,
-    marginBottom: 20,
-  },
-
-  infoTitle: {
-    color: gold,
-    fontSize: 15,
-    fontWeight: '900',
-  },
-
-  infoText: {
-    color: '#D8D8D8',
-    fontSize: 13,
-    marginTop: 4,
-    lineHeight: 19,
-  },
-
-  sectionTitle: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '900',
-    marginTop: 18,
-    marginBottom: 10,
-  },
-
-  inputBox: {
-    height: 58,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
+  vehicleListLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 15,
-  },
-
-  input: {
+    gap: 10,
     flex: 1,
+  },
+  vehicleListText: {
+    flex: 1,
+    gap: 2,
+  },
+  vehicleListTitle: {
     color: '#FFF',
     fontSize: 15,
-    marginLeft: 11,
+    fontWeight: '900',
   },
-
-  suggestionWrap: {
+  vehicleListTitleActive: {
+    color: green,
+  },
+  vehicleListSub: {
+    color: '#777',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  vehicleListSubActive: {
+    color: 'rgba(74,222,128,0.85)',
+  },
+  vehicleListPrice: {
+    color: gold,
+    fontSize: 13,
+    fontWeight: '900',
+    marginLeft: 8,
+  },
+  vehicleListPriceActive: {
+    color: '#FFF',
+  },
+  footerCTA: {
+    width: '100%',
+    gap: 10,
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+  routeField: {
+    minHeight: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    paddingHorizontal: 10,
     gap: 8,
-    marginTop: 10,
-    marginBottom: 6,
   },
-
-  suggestion: {
+  routeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  routeInput: {
+    flex: 1,
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
+    paddingVertical: 8,
+  },
+  routePlaceholder: {
+    color: '#666',
+  },
+  vehicleCardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(74,222,128,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vehicleCardIconActive: {
+    backgroundColor: 'rgba(74,222,128,0.22)',
+  },
+  timingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    width: '100%',
+    flexShrink: 0,
+  },
+  timingButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.28,
+        shadowRadius: 8,
+      },
+      android: { elevation: 4 },
+    }),
+  },
+  timingButtonInactive: {
+    backgroundColor: '#0A0A0A',
+    borderWidth: 1.5,
+    borderColor: 'rgba(74,222,128,0.42)',
+  },
+  timingButtonActive: {
+    backgroundColor: green,
+    borderWidth: 1.5,
+    borderColor: green,
+  },
+  timingButtonText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  timingButtonTextActive: {
+    color: '#111',
+  },
+  scheduleSummary: {
+    minHeight: 42,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    paddingVertical: 9,
+    borderColor: 'rgba(74,222,128,0.28)',
+    backgroundColor: 'rgba(74,222,128,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 12,
-    backgroundColor: 'rgba(20,20,20,0.9)',
   },
-
-  suggestionText: {
+  scheduleSummaryText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  chipsRow: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  chip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  chipActive: {
+    borderColor: 'rgba(212,160,23,0.45)',
+    backgroundColor: 'rgba(212,160,23,0.12)',
+  },
+  chipText: {
+    color: '#CCC',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chipTextActive: {
+    color: gold,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  modeBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  modeBtnActive: {
+    backgroundColor: gold,
+    borderColor: gold,
+  },
+  modeBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  modeBtnTextActive: {
+    color: '#111',
+  },
+  dateRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  dateBox: {
+    flex: 1,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  dateBoxText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  pickerBox: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.25)',
+  },
+  pickerDoneBtn: {
+    height: 40,
+    backgroundColor: gold,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pickerDoneText: {
+    color: '#111',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.22)',
+    backgroundColor: 'rgba(212,160,23,0.06)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  priceLabel: {
+    color: '#AAA',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  priceValue: {
+    color: gold,
+    fontSize: 22,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  expandBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  expandBtnText: {
+    color: '#BBB',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  expandedBlock: {
+    gap: 8,
+    paddingBottom: 4,
+  },
+  destChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    maxWidth: 180,
+  },
+  destChipActive: {
+    backgroundColor: gold,
+    borderColor: gold,
+  },
+  destChipText: {
+    color: '#DDD',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  destChipTextActive: {
+    color: '#111',
+  },
+  counterRow: {
+    minHeight: 40,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  counterLabel: {
+    flex: 1,
     color: '#FFF',
     fontSize: 13,
     fontWeight: '700',
   },
-
-  grid: {
+  counterBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#222',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  counterValue: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '900',
+    minWidth: 36,
+    textAlign: 'center',
+  },
+  noteBox: {
+    minHeight: 56,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  noteInput: {
+    flex: 1,
+    color: '#FFF',
+    fontSize: 13,
+    minHeight: 40,
+    textAlignVertical: 'top',
+  },
+  commanderBtn: {
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: gold,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 8,
+    paddingHorizontal: 16,
+    gap: 8,
   },
-
-  destCard: {
-    width: '48%',
-    minHeight: 112,
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 20,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    justifyContent: 'center',
+  commanderBtnPending: {
+    backgroundColor: '#C49214',
   },
-
-  destCardActive: {
-    borderColor: gold,
-    backgroundColor: 'rgba(212,160,23,0.08)',
-  },
-
-  destIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#171307',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-
-  destName: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-
-  destNameActive: {
-    color: gold,
-  },
-
-  destSub: {
-    color: '#9A9A9A',
-    fontSize: 12,
-    marginTop: 5,
-  },
-
-  checkCircle: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: gold,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  locationBtn: {
-    height: 48,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.45)',
-    marginTop: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 15,
-    gap: 10,
-  },
-
-  locationText: {
-    color: gold,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
-  modeRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-
-  modeCard: {
+  commanderBtnContent: {
     flex: 1,
-    height: 70,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    gap: 2,
   },
-
-  modeActive: {
-    backgroundColor: gold,
-    borderColor: gold,
-  },
-
-  modeText: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '900',
-    marginTop: 5,
-  },
-
-  modeTextActive: {
-    color: '#111',
-  },
-
-  twoCols: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-
-  smallBox: {
-    flex: 1,
-    height: 70,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-  },
-
-  smallBoxLabel: {
-    color: '#AAA',
-    fontSize: 12,
-  },
-
-  smallBoxValue: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '800',
-    marginTop: 4,
-  },
-
-  pickerBox: {
-    marginTop: 14,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: '#111',
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.35)',
-  },
-
-  closePickerBtn: {
-    height: 48,
-    backgroundColor: gold,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  closePickerText: {
+  commanderBtnText: {
     color: '#111',
     fontSize: 16,
     fontWeight: '900',
   },
-
-  counterBox: {
-    height: 62,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 15,
-    marginBottom: 10,
-  },
-
-  counterLabel: {
-    flex: 1,
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '800',
-    marginLeft: 12,
-  },
-
-  counterBtn: {
-    width: 35,
-    height: 35,
-    borderRadius: 18,
-    backgroundColor: '#222',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  counterValue: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '900',
-    marginHorizontal: 14,
-  },
-
-  noteBox: {
-    minHeight: 105,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.11)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: 15,
-    paddingTop: 15,
-    marginTop: 10,
-  },
-
-  noteInput: {
-    flex: 1,
-    color: '#FFF',
-    fontSize: 15,
-    marginLeft: 11,
-    minHeight: 85,
-    textAlignVertical: 'top',
-  },
-
-  counterChars: {
-    color: '#777',
-    textAlign: 'right',
-    marginTop: 6,
+  commanderBtnPrice: {
+    color: 'rgba(17,17,17,0.72)',
     fontSize: 12,
-  },
-
-  priceBox: {
-    marginTop: 22,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: gold,
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    padding: 18,
-  },
-
-  priceTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-
-  priceLabel: {
-    color: '#DDD',
-    fontSize: 15,
-  },
-
-  price: {
-    color: gold,
-    fontSize: 36,
-    fontWeight: '900',
-    marginTop: 8,
-  },
-
-  priceSub: {
-    color: '#CFCFCF',
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  mainBtn: {
-    marginTop: 18,
-    height: 66,
-    borderRadius: 22,
-    backgroundColor: gold,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  mainBtnText: {
-    flex: 1,
-    textAlign: 'center',
-    color: '#111',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-
-  mainBtnIcon: {
-    width: 45,
-    height: 45,
-    borderRadius: 23,
-    backgroundColor: '#101010',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  bottomInfo: {
-    marginTop: 18,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    padding: 15,
-    gap: 12,
-  },
-
-  infoItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-
-  infoItemText: {
-    color: '#DDD',
-    fontSize: 13.5,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });

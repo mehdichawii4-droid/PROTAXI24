@@ -4,7 +4,10 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { addDoc, collection } from 'firebase/firestore';
+import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
 import { db } from '../firebaseConfig';
+import { pickPartnerFieldsFromParams } from '@/services/partnerService';
 
 
 import {
@@ -22,6 +25,8 @@ const gold = '#D4A017';
 const phoneNumber = '+213671421448';
 
 export default function ConfirmationScreen() {
+  const { profile } = useAuth();
+  const params = useLocalSearchParams();
   const {
     service,
     mode,
@@ -33,7 +38,10 @@ export default function ConfirmationScreen() {
     bags,
     tripType,
     price,
-  } = useLocalSearchParams();
+  } = params;
+  const partnerFields = pickPartnerFieldsFromParams(
+    params as Record<string, string | string[] | undefined>,
+  );
 
   const numericPrice = Number(price || 0);
 
@@ -47,6 +55,18 @@ export default function ConfirmationScreen() {
     : numericPrice;
 
  const confirmFinal = async () => {
+  const clientUid = getFirebaseAuth().currentUser?.uid;
+  if (!clientUid) {
+    Alert.alert(
+      'Connexion requise',
+      'Connectez-vous pour confirmer votre réservation taxi PROTAXI.',
+    );
+    return;
+  }
+
+  const clientName = profile?.fullName?.trim() || 'Client PROTAXI';
+  const clientPhone = profile?.phone?.trim() || 'Non renseigné';
+
   try {
     const newReservation = {
       id: Date.now().toString(),
@@ -74,8 +94,10 @@ export default function ConfirmationScreen() {
     );
 
     const rideDoc = await addDoc(collection(db, 'rides'), {
-      client: 'Mehdi',
-      phone: '+213555000000',
+      clientUid,
+      clientName,
+      client: clientName,
+      phone: clientPhone,
       service: String(service || 'Transfert aéroport'),
       departure: String(address || 'À confirmer'),
       destination: String(airport || 'À confirmer'),
@@ -92,6 +114,7 @@ export default function ConfirmationScreen() {
       driverCar: '',
       driverId: '',
       createdAt: new Date(),
+      ...partnerFields,
     });
 
     await Haptics.notificationAsync(
@@ -109,11 +132,12 @@ export default function ConfirmationScreen() {
               pathname: '/course-tracking',
               params: {
                 id: rideDoc.id,
-                driverId: 'DRV-001',
+                rideId: rideDoc.id,
                 address: String(address || ''),
                 airport: String(airport || ''),
                 time: String(time || ''),
                 price: String(finalPrice || '0'),
+                status: 'En attente',
               },
             }),
         },

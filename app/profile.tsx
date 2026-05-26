@@ -2,9 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { getDocs, query, where } from 'firebase/firestore';
 import { useCallback, useState } from 'react';
 import {
-  Alert,
   Image,
   Linking,
   SafeAreaView,
@@ -14,14 +14,41 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { getCollectionRef } from '@/firebase/firestore';
+import { useAuth } from '@/hooks/useAuth';
+import { useAuthLogout } from '@/hooks/useAuthLogout';
+import { getUnreadNotificationCount } from '@/services/userNotificationInbox';
+import { devError } from '@/utils/devLog';
 
 const gold = '#D4A017';
 const green = '#2ECC71';
 const red = '#FF4B4B';
 
+function isFinishedRideStatus(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toLowerCase();
+  return normalized === 'terminée' || normalized === 'terminee';
+}
+
+function computeAverageRideRating(rides: Array<{ rating?: unknown }>): string {
+  const ratings = rides
+    .map((ride) => Number(ride.rating))
+    .filter((rating) => Number.isFinite(rating) && rating >= 1 && rating <= 5);
+
+  if (ratings.length === 0) {
+    return '0.0';
+  }
+
+  const average = ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
+  return average.toFixed(1);
+}
+
 export default function ProfileScreen() {
+  const { confirmLogout } = useAuthLogout();
+  const { profile: authProfile, user } = useAuth();
+  const clientUid = authProfile?.uid ?? user?.uid ?? null;
   const [reservationCount, setReservationCount] = useState(0);
   const [finishedCount, setFinishedCount] = useState(0);
+  const [averageRating, setAverageRating] = useState('0.0');
   const [notificationCount, setNotificationCount] = useState(0);
 
   const [profile, setProfile] = useState({
@@ -33,30 +60,44 @@ export default function ProfileScreen() {
     createdAt: '18 Mai 2026',
   });
 
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     const data = await AsyncStorage.getItem('profile');
 
     if (data) {
       setProfile(JSON.parse(data));
     }
 
-    const reservationsData = await AsyncStorage.getItem('reservations');
-    const reservations = reservationsData ? JSON.parse(reservationsData) : [];
+    if (!clientUid) {
+      setReservationCount(0);
+      setFinishedCount(0);
+      setAverageRating('0.0');
+      setNotificationCount(0);
+      return;
+    }
 
-    const notificationsData = await AsyncStorage.getItem('notifications');
-    const notifications = notificationsData ? JSON.parse(notificationsData) : [];
+    try {
+      const snapshot = await getDocs(
+        query(getCollectionRef('rides'), where('clientUid', '==', clientUid))
+      );
+      const rides = snapshot.docs.map((docSnap) => docSnap.data());
 
-    setReservationCount(reservations.length);
-    setFinishedCount(
-      reservations.filter((item: any) => item.status === 'Terminée').length
-    );
-    setNotificationCount(notifications.filter((item: any) => !item.read).length);
-  };
+      setReservationCount(rides.length);
+      setFinishedCount(rides.filter((ride) => isFinishedRideStatus(ride.status)).length);
+      setAverageRating(computeAverageRideRating(rides));
+    } catch (error) {
+      devError('[PROFILE STATS] failed to load rides', error);
+      setReservationCount(0);
+      setFinishedCount(0);
+      setAverageRating('0.0');
+    }
+
+    setNotificationCount(await getUnreadNotificationCount(clientUid));
+  }, [clientUid]);
 
   useFocusEffect(
     useCallback(() => {
-      loadProfile();
-    }, [])
+      void loadProfile();
+    }, [loadProfile])
   );
 
   const editProfile = () => {
@@ -64,23 +105,8 @@ export default function ProfileScreen() {
   };
 
   const logout = () => {
-  Alert.alert(
-    'Déconnexion',
-    'Voulez-vous vraiment quitter votre compte ?',
-    [
-      { text: 'Non', style: 'cancel' },
-      {
-        text: 'Oui',
-        style: 'destructive',
-        onPress: async () => {
-          await AsyncStorage.removeItem('isLoggedIn');
-          await AsyncStorage.removeItem('userToken');
-          router.replace('/');
-        },
-      },
-    ]
-  );
-};
+    confirmLogout();
+  };
 
   const callSupport = () => {
     Linking.openURL('tel:+213671421448');
@@ -132,7 +158,7 @@ export default function ProfileScreen() {
         <View style={styles.statsBox}>
           <StatItem icon="car-sport" value={reservationCount.toString()} label="Courses" />
           <StatItem icon="checkmark-done-circle" value={finishedCount.toString()} label="Terminées" />
-          <StatItem icon="star" value="5.0" label="Note" />
+          <StatItem icon="star" value={averageRating} label="Note" />
         </View>
 
         <View style={styles.vipBox}>

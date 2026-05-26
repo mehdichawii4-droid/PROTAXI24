@@ -1,44 +1,253 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { useCallback, useMemo, useState } from 'react';
 import {
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { getCollectionRef, getTourBookingsCollectionRef } from '@/firebase/firestore';
+import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  buildTourSummaryParams,
+  formatTourHistoryPrice,
+  getTourBookingCreatedAtLabel,
+  getTourBookingModeLabel,
+  getTourBookingStatusConfig,
+  getTourCheckInStatusLabel,
+  getTourPaymentStatusLabel,
+  isGroupTourBooking,
+  normalizeTourBookingRecord,
+  type TourBookingRecord,
+} from '@/services/tourBookingHistory';
+import { devError, devLog } from '@/utils/devLog';
+import { PROTAXI_ROUTES } from '@/utils/navigation';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
 const green = '#2ECC71';
+const tourismGreen = '#8BC53F';
+const tourismGlow = 'rgba(139,197,63,0.18)';
+
+type TaxiHistoryItem = {
+  id: string;
+  status?: string;
+  airport?: string;
+  date?: string;
+  time?: string;
+  passengers?: string;
+  price?: string | number;
+};
+
+const TAXI_HISTORY_STATUSES = new Set(['Terminée', 'Annulée']);
+
+function normalizeFirestoreRideToHistoryItem(
+  id: string,
+  data: Record<string, unknown>,
+): TaxiHistoryItem {
+  const priceRaw = data.price;
+  let price: string | number = 0;
+
+  if (typeof priceRaw === 'number') {
+    price = priceRaw;
+  } else if (typeof priceRaw === 'string') {
+    const parsed = Number(priceRaw.replace(/[^\d.-]/g, ''));
+    price = Number.isFinite(parsed) && parsed > 0 ? parsed : priceRaw;
+  }
+
+  return {
+    id,
+    status: String(data.status || ''),
+    airport: String(data.airport || data.destination || 'Course'),
+    date: String(data.date || ''),
+    time: String(data.time || ''),
+    passengers: String(data.passengers || '1'),
+    price,
+  };
+}
+
+function filterTaxiHistoryItems(items: TaxiHistoryItem[]) {
+  return items.filter((item) => TAXI_HISTORY_STATUSES.has(String(item.status || '')));
+}
+
+async function loadAsyncStorageTaxiHistory(): Promise<TaxiHistoryItem[]> {
+  const data = await AsyncStorage.getItem('reservations');
+  const reservations = data ? JSON.parse(data) : [];
+
+  return filterTaxiHistoryItems(reservations as TaxiHistoryItem[]).reverse();
+}
+
+function getTourBookingCreatedAtMs(value: unknown) {
+  if (!value) return 0;
+
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+
+  if (typeof value === 'object' && value !== null && 'toDate' in value) {
+    return (value as { toDate?: () => Date }).toDate?.()?.getTime() ?? 0;
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  return 0;
+}
+
+function sortTourBookingsNewestFirst(bookings: TourBookingRecord[]) {
+  return [...bookings].sort(
+    (left, right) =>
+      getTourBookingCreatedAtMs(right.createdAt) - getTourBookingCreatedAtMs(left.createdAt),
+  );
+}
 
 export default function HistoryScreen() {
-  const [history, setHistory] = useState<any[]>([]);
+  const { user } = useAuth();
+  const [firestoreTaxiHistory, setFirestoreTaxiHistory] = useState<TaxiHistoryItem[]>([]);
+  const [asyncStorageTaxiHistory, setAsyncStorageTaxiHistory] = useState<TaxiHistoryItem[]>([]);
+  const [useAsyncStorageFallback, setUseAsyncStorageFallback] = useState(false);
+  const [tourBookings, setTourBookings] = useState<TourBookingRecord[]>([]);
 
-  const loadHistory = async () => {
-    const data = await AsyncStorage.getItem('reservations');
-    const reservations = data ? JSON.parse(data) : [];
-
-    const filtered = reservations.filter(
-      (item: any) => item.status === 'Terminée' || item.status === 'Annulée'
-    );
-
-    setHistory(filtered.reverse());
-  };
+  const history = useMemo(
+    () => (useAsyncStorageFallback ? asyncStorageTaxiHistory : firestoreTaxiHistory),
+    [useAsyncStorageFallback, asyncStorageTaxiHistory, firestoreTaxiHistory],
+  );
 
   useFocusEffect(
     useCallback(() => {
-      loadHistory();
-    }, [])
+      const clientUid = user?.uid ?? getFirebaseAuth().currentUser?.uid;
+
+      if (!clientUid) {
+        setFirestoreTaxiHistory([]);
+        setAsyncStorageTaxiHistory([]);
+        setUseAsyncStorageFallback(false);
+        setTourBookings([]);
+        return undefined;
+      }
+
+      const applyAsyncStorageFallback = () => {
+        void loadAsyncStorageTaxiHistory()
+          .then((items) => {
+            setAsyncStorageTaxiHistory(items);
+          })
+          .catch((error) => {
+            devError('[PROMISE DENIED - history - loadHistory]', error);
+            setAsyncStorageTaxiHistory([]);
+          });
+      };
+
+      const ridesQuery = query(
+        getCollectionRef('rides'),
+        where('clientUid', '==', clientUid),
+        orderBy('createdAt', 'desc'),
+      );
+
+      const unsubscribeRides = onSnapshot(
+        ridesQuery,
+        (snapshot) => {
+          if (snapshot.empty) {
+            setUseAsyncStorageFallback(true);
+            setFirestoreTaxiHistory([]);
+            applyAsyncStorageFallback();
+            return;
+          }
+
+          setUseAsyncStorageFallback(false);
+          setFirestoreTaxiHistory(
+            filterTaxiHistoryItems(
+              snapshot.docs.map((docSnap) =>
+                normalizeFirestoreRideToHistoryItem(
+                  docSnap.id,
+                  docSnap.data() as Record<string, unknown>,
+                ),
+              ),
+            ),
+          );
+        },
+        (error) => {
+          devError('[SNAPSHOT DENIED - history - taxi rides]', error);
+          setUseAsyncStorageFallback(true);
+          setFirestoreTaxiHistory([]);
+          applyAsyncStorageFallback();
+        },
+      );
+
+      const tourBookingsQuery = query(
+        getTourBookingsCollectionRef(),
+        where('clientUid', '==', clientUid),
+      );
+
+      devLog('[HISTORY QUERY]', {
+        collection: 'tourBookings',
+        filters: [{ field: 'clientUid', operator: '==', value: clientUid }],
+        orderBy: 'createdAt desc (client-side after snapshot)',
+      });
+
+      const unsubscribeTourBookings = onSnapshot(
+        tourBookingsQuery,
+        (snapshot) => {
+          const bookings = sortTourBookingsNewestFirst(
+            snapshot.docs.map((docSnap) =>
+              normalizeTourBookingRecord(docSnap.id, docSnap.data() as Record<string, unknown>),
+            ),
+          );
+          setTourBookings(bookings);
+        },
+        (error) => {
+          const message = String((error as { message?: string })?.message || error);
+          const isIndexError =
+            message.includes('requires an index') || message.includes('failed-precondition');
+
+          if (isIndexError) {
+            devError('[HISTORY INDEX REQUIRED]', {
+              collection: 'tourBookings',
+              requiredIndex: {
+                fields: [
+                  { fieldPath: 'clientUid', order: 'ASCENDING' },
+                  { fieldPath: 'createdAt', order: 'DESCENDING' },
+                ],
+              },
+              deployCommand:
+                'npx firebase-tools deploy --only firestore:indexes --project protaxi24-8abf2',
+              note:
+                'history.tsx uses where(clientUid) only and sorts createdAt client-side; deploy this index if you re-enable orderBy(createdAt) server-side.',
+              error,
+            });
+          }
+
+          devError('[SNAPSHOT DENIED - history - TourBookings]', error);
+        },
+      );
+
+      return () => {
+        unsubscribeRides();
+        unsubscribeTourBookings();
+      };
+    }, [user?.uid]),
   );
 
   const totalSpent = history
     .filter((item) => item.status === 'Terminée')
     .reduce((sum, item) => sum + Number(item.price || 0), 0);
+
+  const privateTourBookings = useMemo(
+    () => tourBookings.filter((booking) => !isGroupTourBooking(booking)),
+    [tourBookings],
+  );
+
+  const groupTourBookings = useMemo(
+    () => tourBookings.filter((booking) => isGroupTourBooking(booking)),
+    [tourBookings],
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -69,7 +278,7 @@ export default function HistoryScreen() {
         </View>
 
         {history.length === 0 && (
-          <Text style={styles.emptyText}>Aucun historique pour le moment.</Text>
+          <Text style={styles.emptyText}>Aucun historique taxi pour le moment.</Text>
         )}
 
         {history.map((item) => {
@@ -105,9 +314,9 @@ export default function HistoryScreen() {
                 </View>
               </View>
 
-              <InfoRow icon="calendar-outline" text={item.date || '-'} />
-              <InfoRow icon="time-outline" text={item.time || '-'} />
-              <InfoRow icon="people-outline" text={`${item.passengers || '1'} passagers`} />
+              <TaxiInfoRow icon="calendar-outline" text={item.date || '-'} />
+              <TaxiInfoRow icon="time-outline" text={item.time || '-'} />
+              <TaxiInfoRow icon="people-outline" text={`${item.passengers || '1'} passagers`} />
 
               <View style={styles.bottomRow}>
                 <View>
@@ -143,16 +352,160 @@ export default function HistoryScreen() {
             {totalSpent.toLocaleString('fr-FR')} DZD
           </Text>
         </View>
+
+        <View style={styles.tourismSection}>
+          <View style={styles.tourismHeroBox}>
+            <View style={styles.tourismHeroIcon}>
+              <MaterialCommunityIcons name="compass-outline" size={34} color={tourismGreen} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tourismHeroTitle}>Mes expériences PROTAXI</Text>
+              <Text style={styles.tourismHeroSub}>
+                Retrouvez vos réservations tourisme privées et groupe.
+              </Text>
+            </View>
+          </View>
+
+          {tourBookings.length === 0 ? (
+            <Text style={styles.tourismEmptyText}>
+              Aucune expérience tourisme enregistrée pour le moment.
+            </Text>
+          ) : null}
+
+          {privateTourBookings.length > 0 ? (
+            <View style={styles.tourismSubsection}>
+              <View style={styles.tourismSubsectionHeader}>
+                <Ionicons name="person-outline" size={16} color={tourismGreen} />
+                <Text style={styles.tourismSubsectionTitle}>Expériences privées</Text>
+                <Text style={styles.tourismSubsectionCount}>{privateTourBookings.length}</Text>
+              </View>
+              {privateTourBookings.map((booking) => (
+                <TourExperienceCard key={booking.id} booking={booking} />
+              ))}
+            </View>
+          ) : null}
+
+          {groupTourBookings.length > 0 ? (
+            <View style={styles.tourismSubsection}>
+              <View style={styles.tourismSubsectionHeader}>
+                <Ionicons name="people-outline" size={16} color={tourismGreen} />
+                <Text style={styles.tourismSubsectionTitle}>Expériences groupe</Text>
+                <Text style={styles.tourismSubsectionCount}>{groupTourBookings.length}</Text>
+              </View>
+              {groupTourBookings.map((booking) => (
+                <TourExperienceCard key={booking.id} booking={booking} />
+              ))}
+            </View>
+          ) : null}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function InfoRow({ icon, text }: any) {
+function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
+  const isGroup = isGroupTourBooking(booking);
+  const statusConfig = getTourBookingStatusConfig(booking.status);
+  const modeLabel = getTourBookingModeLabel(booking.bookingMode);
+  const paymentLabel = getTourPaymentStatusLabel(booking);
+  const checkInLabel = getTourCheckInStatusLabel(booking);
+
+  const openSummary = () => {
+    router.push({
+      pathname: PROTAXI_ROUTES.tourSummary,
+      params: buildTourSummaryParams(booking),
+    });
+  };
+
+  return (
+    <View style={[styles.tourismCard, isGroup && styles.tourismCardGroup]}>
+      <View style={styles.tourismCardGlow} />
+
+      <View style={styles.tourismCardTop}>
+        <View style={styles.tourismCardTitleWrap}>
+          <Text style={styles.tourismCardTitle} numberOfLines={2}>
+            {booking.experience || booking.circuitName || 'Expérience PROTAXI'}
+          </Text>
+          <View style={styles.tourismModeBadge}>
+            <Text style={styles.tourismModeBadgeText}>{modeLabel}</Text>
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.tourismStatusBadge,
+            {
+              backgroundColor: statusConfig.bg,
+              borderColor: statusConfig.border,
+            },
+          ]}
+        >
+          <Text style={[styles.tourismStatusBadgeText, { color: statusConfig.color }]}>
+            {statusConfig.label}
+          </Text>
+        </View>
+      </View>
+
+      <TourInfoRow icon="calendar-outline" label="Date" value={booking.date || '—'} />
+      <TourInfoRow icon="cash-outline" label="Prix" value={formatTourHistoryPrice(booking.price)} />
+      <TourInfoRow
+        icon="time-outline"
+        label="Réservée le"
+        value={getTourBookingCreatedAtLabel(booking.createdAt)}
+      />
+
+      {isGroup && paymentLabel ? (
+        <TourInfoRow icon="wallet-outline" label="Paiement" value={paymentLabel} />
+      ) : null}
+
+      {isGroup && booking.ticketCode ? (
+        <TourInfoRow icon="ticket-outline" label="Ticket" value={booking.ticketCode} />
+      ) : null}
+
+      {isGroup && checkInLabel ? (
+        <TourInfoRow icon="qr-code-outline" label="Check-in" value={checkInLabel} />
+      ) : null}
+
+      <View style={styles.tourismCardBottom}>
+        <View>
+          <Text style={styles.tourismCardPriceLabel}>Tarif</Text>
+          <Text style={styles.tourismCardPrice}>{formatTourHistoryPrice(booking.price)}</Text>
+        </View>
+
+        <TouchableOpacity style={styles.tourismSummaryBtn} activeOpacity={0.85} onPress={openSummary}>
+          <MaterialCommunityIcons name="map-marker-path" size={16} color="#111" />
+          <Text style={styles.tourismSummaryBtnText}>Voir le résumé</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+function TaxiInfoRow({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
   return (
     <View style={styles.infoRow}>
       <Ionicons name={icon} size={18} color={gold} />
       <Text style={styles.infoText}>{text}</Text>
+    </View>
+  );
+}
+
+function TourInfoRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.tourismInfoRow}>
+      <Ionicons name={icon} size={16} color={tourismGreen} />
+      <Text style={styles.tourismInfoLabel}>{label}</Text>
+      <Text style={styles.tourismInfoValue} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -355,6 +708,236 @@ const styles = StyleSheet.create({
   totalPrice: {
     color: gold,
     fontSize: 18,
+    fontWeight: '900',
+  },
+
+  tourismSection: {
+    marginTop: 28,
+    paddingTop: 8,
+  },
+
+  tourismHeroBox: {
+    minHeight: 104,
+    borderRadius: 24,
+    backgroundColor: '#0D0D0D',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.28)',
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 18,
+    shadowColor: tourismGreen,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+
+  tourismHeroIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: 20,
+    backgroundColor: tourismGlow,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.24)',
+  },
+
+  tourismHeroTitle: {
+    color: '#FFF',
+    fontSize: 19,
+    fontWeight: '900',
+  },
+
+  tourismHeroSub: {
+    color: '#8A8A8A',
+    fontSize: 13,
+    marginTop: 6,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+
+  tourismEmptyText: {
+    color: '#8A8A8A',
+    textAlign: 'center',
+    marginBottom: 16,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+
+  tourismSubsection: {
+    marginBottom: 18,
+  },
+
+  tourismSubsectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+
+  tourismSubsectionTitle: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '900',
+    flex: 1,
+  },
+
+  tourismSubsectionCount: {
+    color: tourismGreen,
+    fontSize: 12,
+    fontWeight: '900',
+    backgroundColor: tourismGlow,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.24)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+
+  tourismCard: {
+    borderRadius: 22,
+    backgroundColor: '#0D0D0D',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.18)',
+    padding: 16,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+
+  tourismCardGroup: {
+    borderColor: 'rgba(139,197,63,0.32)',
+    shadowColor: tourismGreen,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+
+  tourismCardGlow: {
+    position: 'absolute',
+    top: -30,
+    right: -20,
+    width: 90,
+    height: 90,
+    borderRadius: 999,
+    backgroundColor: tourismGlow,
+  },
+
+  tourismCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+
+  tourismCardTitleWrap: {
+    flex: 1,
+    gap: 8,
+  },
+
+  tourismCardTitle: {
+    color: '#FFF',
+    fontSize: 17,
+    fontWeight: '900',
+    lineHeight: 22,
+  },
+
+  tourismModeBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: tourismGlow,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.24)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+
+  tourismModeBadgeText: {
+    color: tourismGreen,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+
+  tourismStatusBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+
+  tourismStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '900',
+  },
+
+  tourismInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+
+  tourismInfoLabel: {
+    color: '#8A8A8A',
+    fontSize: 12,
+    fontWeight: '700',
+    width: 88,
+  },
+
+  tourismInfoValue: {
+    color: '#D4D4D4',
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+
+  tourismCardBottom: {
+    marginTop: 10,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(139,197,63,0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+
+  tourismCardPriceLabel: {
+    color: '#8A8A8A',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+
+  tourismCardPrice: {
+    color: tourismGreen,
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+
+  tourismSummaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: tourismGreen,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    shadowColor: tourismGreen,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+
+  tourismSummaryBtnText: {
+    color: '#111',
+    fontSize: 13,
     fontWeight: '900',
   },
 });

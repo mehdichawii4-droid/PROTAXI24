@@ -1,0 +1,681 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Helpers globaux
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isDriver() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/drivers/$(request.auth.uid));
+    }
+
+    function isPartner() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/partners/$(request.auth.uid));
+    }
+
+    function partnerProfile() {
+      return get(/databases/$(database)/documents/partners/$(request.auth.uid)).data;
+    }
+
+    function isPartnerActive() {
+      return isPartner()
+        && (
+          !('isActive' in partnerProfile())
+          || partnerProfile().isActive != false
+        );
+    }
+
+    function isPartnerRideOwner(data) {
+      return isPartnerActive()
+        && data.partnerId is string
+        && data.partnerId.size() > 0
+        && data.partnerId == request.auth.uid;
+    }
+
+    function isPartnerTourBookingOwner(data) {
+      return isPartnerRideOwner(data);
+    }
+
+    function isPartnerRideCreate() {
+      let data = request.resource.data;
+      return isPartnerActive()
+        && data.partnerId == request.auth.uid
+        && data.partnerName is string
+        && data.partnerName.size() > 0
+        && data.clientUid == request.auth.uid
+        && data.status == 'En attente';
+    }
+
+    function isPartnerTourBookingCreate() {
+      let data = request.resource.data;
+      return isPartnerActive()
+        && data.partnerId == request.auth.uid
+        && data.partnerName is string
+        && data.partnerName.size() > 0
+        && data.clientUid == request.auth.uid
+        && data.status == 'pending';
+    }
+
+    // Partenaire : login/logout — markUserOnlineState() écrit exactement ces 2 champs.
+    // affectedKeys() = clés réellement modifiées ; hasOnly() = aucune autre clé touchée.
+    // partnerId doit être passé en argument (variable de chemin du match).
+    function isPartnerOwnerOnlineUpdate(partnerId) {
+      return isSignedIn()
+        && request.auth.uid == partnerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isOnline',
+          'updatedAt',
+        ]);
+    }
+
+    // Partenaire : push token + contact (saveUserPushToken, profil limité).
+    function isPartnerSelfProfileUpdate(partnerId) {
+      return isSignedIn()
+        && request.auth.uid == partnerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'expoPushToken',
+          'expoPushTokenUpdatedAt',
+          'pushTokenRole',
+          'contactName',
+          'phone',
+        ]);
+    }
+
+    // setDoc(merge) sur doc absent = create — autoriser bootstrap online minimal (2 champs).
+    function isPartnerOwnerOnlineCreate(partnerId) {
+      return isSignedIn()
+        && request.auth.uid == partnerId
+        && request.resource.data.keys().hasOnly([
+          'isOnline',
+          'updatedAt',
+        ]);
+    }
+
+    function isAdminPartnerStatusUpdate() {
+      return isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isActive',
+          'updatedAt',
+          'contactName',
+          'phone',
+          'email',
+          'companyName',
+          'partnerType',
+        ]);
+    }
+
+    function driverProfile() {
+      return get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data;
+    }
+
+    function isOwner(data) {
+      return isRideOwner(data);
+    }
+
+    function isRideOwner(data) {
+      return isSignedIn()
+        && data.clientUid is string
+        && data.clientUid.size() > 0
+        && data.clientUid == request.auth.uid;
+    }
+
+    function hasNoAssignedDriver(data) {
+      return !('driverId' in data)
+        || data.driverId == null
+        || (data.driverId is string && data.driverId.size() == 0);
+    }
+
+    function isAssignedDriver(data) {
+      return isDriver()
+        && data.driverId is string
+        && data.driverId.size() > 0
+        && data.driverId == request.auth.uid;
+    }
+
+    function canReadRide(data) {
+      return isAdmin()
+        || isRideOwner(data)
+        || isPartnerRideOwner(data)
+        || (isDriver() && (hasNoAssignedDriver(data) || isAssignedDriver(data)));
+    }
+
+    function isClientUser() {
+      return isSignedIn() && !isAdmin() && !isDriver() && !isPartner();
+    }
+
+    function isClientRideCreate() {
+      let data = request.resource.data;
+      return isSignedIn()
+        && data.clientUid is string
+        && data.clientUid.size() > 0
+        && data.clientUid == request.auth.uid;
+    }
+
+    function driverRideUpdateKeysOk() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'driverLocation',
+        'driverId',
+        'driverName',
+        'driverPhone',
+        'driverCar',
+        'driverPlate',
+        'driverPhoto',
+        'acceptedAt',
+        'finishedAt',
+        'updatedAt',
+        'rejectedDriverIds',
+      ]);
+    }
+
+    function isDriverRideUpdate() {
+      return isDriver()
+        && driverRideUpdateKeysOk()
+        && (
+          (
+            hasNoAssignedDriver(resource.data)
+            && request.resource.data.driverId == request.auth.uid
+            && request.resource.data.status == 'Acceptée'
+          )
+          || (
+            isAssignedDriver(resource.data)
+            && request.resource.data.driverId == request.auth.uid
+          )
+          || (
+            isAssignedDriver(resource.data)
+            && hasNoAssignedDriver(request.resource.data)
+            && request.resource.data.status == 'En attente'
+          )
+        );
+    }
+
+    function isClientRideCancelUpdate() {
+      return isRideOwner(resource.data)
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.status == 'Annulée'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'cancelledAt',
+          'driverId',
+          'driverName',
+          'driverPhone',
+          'driverCar',
+          'updatedAt',
+        ]);
+    }
+
+    function isClientRideTrackingUpdate() {
+      return isRideOwner(resource.data)
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'clientLatitude',
+          'clientLongitude',
+          'clientUpdatedAt',
+          'updatedAt',
+        ]);
+    }
+
+    function isClientRideArrivedUpdate() {
+      return isRideOwner(resource.data)
+        && request.resource.data.clientUid == resource.data.clientUid
+        && resource.data.status == 'En route'
+        && request.resource.data.status == 'Arrivé'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'arrivedAt',
+          'updatedAt',
+        ]);
+    }
+
+    function isClientRideRatingUpdate() {
+      return isRideOwner(resource.data)
+        && resource.data.status == 'Terminée'
+        && !('rating' in resource.data)
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.ratedDriverId is string
+        && request.resource.data.ratedDriverName is string
+        && request.resource.data.clientPoints is number
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'rating',
+          'comment',
+          'ratedAt',
+          'ratedDriverId',
+          'ratedDriverName',
+          'clientPoints',
+        ]);
+    }
+
+    function canUpdateRideStatus() {
+      return isAdmin()
+        || isDriverRideUpdate()
+        || isClientRideCancelUpdate()
+        || isClientRideTrackingUpdate()
+        || isClientRideArrivedUpdate()
+        || isClientRideRatingUpdate();
+    }
+
+    function normalizedAuthEmail() {
+      return request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    function isBootstrapAdminEmail() {
+      return normalizedAuthEmail() == 'admin@protaxi.dz';
+    }
+
+    // Premier login bootstrap admin uniquement — champs stricts, email token vérifié.
+    function isBootstrapAdminDocumentCreate(adminId) {
+      let data = request.resource.data;
+      return isSignedIn()
+        && request.auth.uid == adminId
+        && isBootstrapAdminEmail()
+        && data.uid == request.auth.uid
+        && data.role == 'admin'
+        && data.isApproved == true
+        && data.email == 'admin@protaxi.dz'
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'fullName',
+          'role',
+          'isApproved',
+          'isOnline',
+          'createdAt',
+        ]);
+    }
+
+    function clientCanReadDriverLive(data) {
+      return isClientUser() && (
+        (
+          ('isOnline' in data)
+          && data.isOnline == true
+          && (!('isBusy' in data) || data.isBusy != true)
+        )
+        || (
+          data.currentRideId is string
+          && data.currentRideId.size() > 0
+          && exists(/databases/$(database)/documents/rides/$(data.currentRideId))
+          && get(/databases/$(database)/documents/rides/$(data.currentRideId)).data.clientUid
+            == request.auth.uid
+        )
+      );
+    }
+
+    function isClientDriverLiveReleaseUpdate() {
+      return isClientUser()
+        && resource.data.currentRideId is string
+        && resource.data.currentRideId.size() > 0
+        && exists(/databases/$(database)/documents/rides/$(resource.data.currentRideId))
+        && get(/databases/$(database)/documents/rides/$(resource.data.currentRideId)).data.clientUid
+          == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'isBusy',
+          'currentRideId',
+          'updatedAt',
+        ])
+        && request.resource.data.isBusy == false
+        && request.resource.data.currentRideId == '';
+    }
+
+    function canReadDriversLive(driverId) {
+      return isAdmin()
+        || (isDriver() && request.auth.uid == driverId)
+        || clientCanReadDriverLive(resource.data);
+    }
+
+    function canWriteDriversLive(driverId) {
+      return (isAdmin()
+        && exists(/databases/$(database)/documents/drivers/$(driverId)))
+        || (isDriver() && request.auth.uid == driverId)
+        || isClientDriverLiveReleaseUpdate();
+    }
+
+    function ownsBooking(bookingId) {
+      return isSignedIn()
+        && bookingId is string
+        && bookingId.size() > 0
+        && exists(/databases/$(database)/documents/tourBookings/$(bookingId))
+        && get(/databases/$(database)/documents/tourBookings/$(bookingId)).data.clientUid
+          == request.auth.uid;
+    }
+
+    function participantOwnsBooking(participant) {
+      return participant != null
+        && participant.bookingId is string
+        && ownsBooking(participant.bookingId);
+    }
+
+    // DEBUG join/messages: vérifie si le client connecté est dans participants[]
+    function isParticipant(groupData) {
+      return groupData.participants != null && (
+        (groupData.participants.size() > 0 && participantOwnsBooking(groupData.participants[0]))
+        || (groupData.participants.size() > 1 && participantOwnsBooking(groupData.participants[1]))
+        || (groupData.participants.size() > 2 && participantOwnsBooking(groupData.participants[2]))
+        || (groupData.participants.size() > 3 && participantOwnsBooking(groupData.participants[3]))
+        || (groupData.participants.size() > 4 && participantOwnsBooking(groupData.participants[4]))
+        || (groupData.participants.size() > 5 && participantOwnsBooking(groupData.participants[5]))
+        || (groupData.participants.size() > 6 && participantOwnsBooking(groupData.participants[6]))
+        || (groupData.participants.size() > 7 && participantOwnsBooking(groupData.participants[7]))
+      );
+    }
+
+    function isAssignedStaff(groupData) {
+      return isDriver() && (
+        groupData.assignedDriver == driverProfile().fullName
+        || groupData.assignedGuide == driverProfile().fullName
+      );
+    }
+
+    function isOpenTourGroup(groupData) {
+      return groupData.status == 'open';
+    }
+
+    function tourGroupData(groupId) {
+      return get(/databases/$(database)/documents/tourGroups/$(groupId)).data;
+    }
+
+    // DEBUG lecture tourGroups:
+    // - admin / staff / participant: accès complet
+    // - client connecté: groupes open (matching) ou full (analytics V1 agrégée)
+    function canReadTourGroup(groupData) {
+      return isAdmin()
+        || isParticipant(groupData)
+        || isAssignedStaff(groupData)
+        || (isSignedIn() && groupData.status in ['open', 'full']);
+    }
+
+    function isJoinableOrReadableTourGroup(groupData) {
+      return groupData.status in ['open', 'full'];
+    }
+
+    // DEBUG sous-collections messages/reviews/memories:
+    // admin OU participant OU groupe open/full
+    function canReadTourGroupSubcollection(groupId) {
+      let groupData = tourGroupData(groupId);
+      return isAdmin()
+        || isParticipant(groupData)
+        || isJoinableOrReadableTourGroup(groupData)
+        || isAssignedStaff(groupData);
+    }
+
+    // DEBUG reviews groupe + collectionGroup analytics:
+    // parent open/full OU participant
+    function canReadTourGroupReview(groupId) {
+      let groupData = tourGroupData(groupId);
+      return isSignedIn() && (
+        isAdmin()
+        || isJoinableOrReadableTourGroup(groupData)
+        || isParticipant(groupData)
+        || isAssignedStaff(groupData)
+      );
+    }
+
+    // DEBUG join groupe V1 (tryJoinTourGroup):
+    // client connecté peut incrémenter un groupe open — champs limités aux compteurs/participants
+    function isClientTourGroupJoinUpdate() {
+      let before = resource.data;
+
+      return isSignedIn()
+        && before.status == 'open'
+        && int(before.booked) < int(before.capacity)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'participants',
+          'booked',
+          'remaining',
+          'status',
+          'updatedAt',
+        ]);
+    }
+
+    function isValidTourGroupCreate() {
+      let data = request.resource.data;
+      return isSignedIn()
+        && data.experience is string
+        && data.date is string
+        && data.capacity == 8
+        && data.booked == 1
+        && data.remaining == 7
+        && data.status == 'open'
+        && data.participants is list
+        && data.participants.size() == 1
+        && participantOwnsBooking(data.participants[0]);
+    }
+
+    function isAssignedStaffTrackingUpdate() {
+      return isAssignedStaff(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'trackingStatus',
+          'etaMinutes',
+          'liveLocation',
+          'lastLocationUpdate',
+          'updatedAt',
+        ]);
+    }
+
+    function isOwnerBookingGroupLinkUpdate() {
+      return isOwner(resource.data)
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['groupId']);
+    }
+
+    function isStaffBookingOpsUpdate() {
+      return (isAdmin() || isDriver())
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'checkInStatus',
+          'checkedInAt',
+          'paymentStatus',
+          'depositAmount',
+          'remainingAmount',
+          'paymentMethod',
+          'status',
+          'updatedAt',
+        ]);
+    }
+
+    function canWriteParticipantMessage(groupData) {
+      return isParticipant(groupData)
+        && request.resource.data.senderType == 'participant'
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 1000;
+    }
+
+    function canWriteGuideMessage(groupData) {
+      return isAssignedStaff(groupData)
+        && request.resource.data.senderType == 'guide'
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 1000;
+    }
+
+    function canWriteAdminMessage() {
+      return isAdmin()
+        && request.resource.data.senderType == 'admin'
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 1000;
+    }
+
+    function canWriteReview(groupData) {
+      return isParticipant(groupData)
+        && ownsBooking(request.resource.data.bookingId)
+        && request.resource.data.rating is number
+        && request.resource.data.driverRating is number
+        && request.resource.data.guideRating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.driverRating >= 1
+        && request.resource.data.driverRating <= 5
+        && request.resource.data.guideRating >= 1
+        && request.resource.data.guideRating <= 5;
+    }
+
+    function canWriteMemory(groupData) {
+      let senderType = request.resource.data.senderType;
+      return request.resource.data.imageUrl is string
+        && request.resource.data.imageUrl.size() > 0
+        && (
+          (senderType == 'participant' && isParticipant(groupData))
+          || (senderType == 'guide' && isAssignedStaff(groupData))
+          || (senderType == 'admin' && isAdmin())
+        );
+    }
+
+    // =========================================================================
+    // Collections taxi existantes
+    // =========================================================================
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isSignedIn() && (request.auth.uid == driverId || isAdmin());
+      allow create: if isAdmin();
+      allow update: if isSignedIn() && (request.auth.uid == driverId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow create: if isAdmin() || isBootstrapAdminDocumentCreate(adminId);
+      allow update: if isAdmin() || request.auth.uid == adminId;
+      allow delete: if isAdmin();
+    }
+
+    match /partners/{partnerId} {
+      allow read: if isAdmin()
+        || (request.auth != null && request.auth.uid == partnerId);
+
+      // Création complète réservée admin ; bootstrap online minimal autorisé au propriétaire.
+      allow create: if isAdmin() || isPartnerOwnerOnlineCreate(partnerId);
+
+      allow update: if isAdminPartnerStatusUpdate()
+        || isPartnerOwnerOnlineUpdate(partnerId)
+        || isPartnerSelfProfileUpdate(partnerId);
+
+      allow delete: if false;
+    }
+
+    match /driversLive/{driverId} {
+      allow read: if canReadDriversLive(driverId);
+      allow create, update: if canWriteDriversLive(driverId);
+      allow delete: if isAdmin();
+    }
+
+    match /rides/{rideId} {
+      allow read: if isSignedIn() && canReadRide(resource.data);
+      allow create: if isClientRideCreate() || isPartnerRideCreate();
+
+      allow update: if isSignedIn() && canUpdateRideStatus();
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // Tourisme PROTAXI V1
+    // =========================================================================
+
+    match /tourBookings/{bookingId} {
+      allow read: if isSignedIn() && (
+        isAdmin()
+        || isOwner(resource.data)
+        || isPartnerTourBookingOwner(resource.data)
+        || isDriver()
+      );
+
+      allow create: if isSignedIn() && (
+        (
+          request.resource.data.clientUid == request.auth.uid
+          && request.resource.data.status == 'pending'
+        )
+        || isPartnerTourBookingCreate()
+      );
+
+      allow update: if isSignedIn() && (
+        isAdmin()
+        || isOwnerBookingGroupLinkUpdate()
+        || isStaffBookingOpsUpdate()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /tourGroups/{groupId} {
+      // DEBUG: lecture groupe pour participant + matching + analytics
+      allow read: if isSignedIn() && canReadTourGroup(resource.data);
+
+      allow create: if isValidTourGroupCreate();
+
+      // DEBUG join groupe: update limité aux compteurs/participants
+      allow update: if isSignedIn() && (
+        isAdmin()
+        || isClientTourGroupJoinUpdate()
+        || isAssignedStaffTrackingUpdate()
+      );
+
+      allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && canReadTourGroupSubcollection(groupId);
+
+        allow create: if isSignedIn() && (
+          canWriteParticipantMessage(tourGroupData(groupId))
+          || canWriteGuideMessage(tourGroupData(groupId))
+          || canWriteAdminMessage()
+        );
+
+        allow update, delete: if isAdmin();
+      }
+
+      match /reviews/{reviewId} {
+        // DEBUG tour-summary popularity + avis groupe (lecture directe)
+        allow read: if canReadTourGroupReview(groupId);
+
+        allow create: if isSignedIn() && canWriteReview(tourGroupData(groupId));
+
+        allow update, delete: if isAdmin();
+      }
+
+      match /memories/{memoryId} {
+        allow read: if isSignedIn() && canReadTourGroupSubcollection(groupId);
+
+        allow create: if isSignedIn() && canWriteMemory(tourGroupData(groupId));
+
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    // DEBUG collectionGroup('reviews') — requis par le SDK pour les queries globales.
+    // V1 analytics tour-summary: client connecté peut lire les notes agrégées live.
+    match /{path=**}/reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

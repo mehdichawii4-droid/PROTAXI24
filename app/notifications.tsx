@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -13,6 +12,12 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { useAuth } from '@/hooks/useAuth';
+import {
+  getUserNotifications,
+  setUserNotifications,
+  type UserNotificationItem,
+} from '@/services/userNotificationInbox';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
@@ -20,29 +25,47 @@ const green = '#2ECC71';
 const blue = '#008CFF';
 
 export default function NotificationsScreen() {
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const { profile } = useAuth();
+  const [notifications, setNotifications] = useState<UserNotificationItem[]>([]);
 
-  const loadNotifications = async () => {
-    const data = await AsyncStorage.getItem('notifications');
-    const list = data ? JSON.parse(data) : [];
-    const sorted = list.sort((a: any, b: any) => Number(b.id || 0) - Number(a.id || 0));
+  const loadNotifications = useCallback(async () => {
+    const uid = profile?.uid;
+    if (!uid) {
+      setNotifications([]);
+      return;
+    }
+
+    const list = await getUserNotifications(uid);
+    const sorted = [...list].sort(
+      (a, b) => Number(b.id || 0) - Number(a.id || 0)
+    );
     setNotifications(sorted);
-  };
+  }, [profile?.uid]);
 
   useFocusEffect(
     useCallback(() => {
-      loadNotifications();
-    }, [])
+      void loadNotifications();
+    }, [loadNotifications])
   );
 
   const markAllAsRead = async () => {
+    const uid = profile?.uid;
+    if (!uid) {
+      return;
+    }
+
     const updated = notifications.map((item) => ({ ...item, read: true }));
     setNotifications(updated);
-    await AsyncStorage.setItem('notifications', JSON.stringify(updated));
+    await setUserNotifications(uid, updated);
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const clearNotifications = () => {
+    const uid = profile?.uid;
+    if (!uid) {
+      return;
+    }
+
     Alert.alert(
       'Supprimer les notifications',
       'Voulez-vous vraiment supprimer toutes les notifications ?',
@@ -52,7 +75,7 @@ export default function NotificationsScreen() {
           text: 'Oui',
           style: 'destructive',
           onPress: async () => {
-            await AsyncStorage.removeItem('notifications');
+            await setUserNotifications(uid, []);
             setNotifications([]);
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
           },
