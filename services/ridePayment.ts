@@ -1,6 +1,6 @@
 import { serverTimestamp, updateDoc } from 'firebase/firestore';
 import { getRideDocRef } from '@/firebase/firestore';
-import { devError, devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 import { parseRidePrice } from '@/utils/rideTracking';
 
 /** V1 enabled methods — online providers reserved for later. */
@@ -233,7 +233,7 @@ export async function confirmCashPayment(
       updatedAt: serverTimestamp(),
     });
 
-    devLog('[RIDE PAYMENT] cash confirmed', {
+    logger.info('[RIDE PAYMENT] cash confirmed', {
       rideId: normalizedRideId,
       driverId: normalizedDriverId,
     });
@@ -242,7 +242,7 @@ export async function confirmCashPayment(
       throw error;
     }
 
-    devError('[RIDE PAYMENT] confirmCashPayment failed', {
+    logger.error('[RIDE PAYMENT] confirmCashPayment failed', {
       rideId: normalizedRideId,
       driverId: normalizedDriverId,
       error,

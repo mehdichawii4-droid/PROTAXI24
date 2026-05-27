@@ -1,7 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import type { Href, Router } from 'expo-router';
 import { Platform } from 'react-native';
-import { devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 export const DRIVER_RIDE_ASSIGNED_EVENT = 'taxi_ride_assigned';
 export const RIDE_CHAT_MESSAGE_EVENT = 'taxi_ride_chat_message';
@@ -45,7 +45,7 @@ function navigateToRideChat(router: Router, rideId: string, source: 'tap' | 'col
   setPendingPushRideId(rideId);
   setPendingOpenChat(true);
 
-  devLog('[PUSH] notification tapped — open chat', {
+  logger.info('[PUSH] notification tapped — open chat', {
     source,
     eventType: RIDE_CHAT_MESSAGE_EVENT,
     rideId,
@@ -72,7 +72,7 @@ export function handleRideAssignedNotificationTap(
   }
 
   const rideId = String(data.rideId ?? '').trim();
-  devLog('[PUSH] notification tapped', {
+  logger.info('[PUSH] notification tapped', {
     source,
     eventType,
     rideId: rideId || null,
@@ -145,7 +145,7 @@ export async function handleColdStartNotificationTap(router: Router) {
 
 export function setupPushNotificationRouting(router: Router): () => void {
   if (Platform.OS === 'web') {
-    devLog('[PUSH] routing disabled on web');
+    logger.info('[PUSH] routing disabled on web');
     return () => {};
   }
 
@@ -169,7 +169,7 @@ export function setupPushNotificationRouting(router: Router): () => void {
         return;
       }
 
-      devLog('[PUSH] remote received', {
+      logger.info('[PUSH] remote received', {
         eventType,
         rideId: String(data.rideId ?? '').trim() || null,
         status: data.status ?? null,

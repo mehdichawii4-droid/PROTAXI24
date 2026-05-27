@@ -12,7 +12,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db, getRideDocRef, getRideMessagesCollectionRef } from '@/firebase/firestore';
-import { devError, devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 export type RideMessageSenderRole = 'client' | 'driver';
 
@@ -175,7 +175,7 @@ export function subscribeRideMessages(
       onMessages(mapRideMessageSnapshot(snapshot));
     },
     (error) => {
-      devError('[RIDE CHAT] subscribeRideMessages failed', { rideId: normalizedRideId, error });
+      logger.error('[RIDE CHAT] subscribeRideMessages failed', { rideId: normalizedRideId, error });
       onError?.(error);
     },
   );
@@ -276,7 +276,7 @@ export async function sendRideMessage(
       return messageRef.id;
     });
 
-    devLog('[RIDE CHAT] message sent', {
+    logger.info('[RIDE CHAT] message sent', {
       rideId: normalizedRideId,
       messageId,
       senderRole,
@@ -288,7 +288,7 @@ export async function sendRideMessage(
       throw error;
     }
 
-    devError('[RIDE CHAT] sendRideMessage failed', {
+    logger.error('[RIDE CHAT] sendRideMessage failed', {
       rideId: normalizedRideId,
       senderRole,
       error,
@@ -346,7 +346,7 @@ export async function markRideMessagesRead(
       updatedAt: serverTimestamp(),
     });
 
-    devLog('[RIDE CHAT] messages marked read', {
+    logger.info('[RIDE CHAT] messages marked read', {
       rideId: normalizedRideId,
       readerRole,
       markedCount: unreadMessages.length,
@@ -358,7 +358,7 @@ export async function markRideMessagesRead(
       throw error;
     }
 
-    devError('[RIDE CHAT] markRideMessagesRead failed', {
+    logger.error('[RIDE CHAT] markRideMessagesRead failed', {
       rideId: normalizedRideId,
       readerRole,
       error,

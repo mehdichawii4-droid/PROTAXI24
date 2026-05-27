@@ -5,7 +5,7 @@ import { Platform } from 'react-native';
 import { db } from '@/firebase/firestore';
 import type { UserRole } from '@/firebase/types';
 import { collectionForRole } from '@/services/authUtils';
-import { devError, devLog, devWarn } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 export type PushPermissionStatus = Notifications.PermissionStatus | 'unsupported';
 
@@ -42,14 +42,14 @@ export async function getNotificationPermissionStatus(): Promise<PushPermissionS
 
 export async function requestPushNotificationPermissions(): Promise<boolean> {
   if (!isPushSupportedPlatform()) {
-    devLog('[PUSH PERMISSION] skipped — unsupported platform', Platform.OS);
+    logger.info('[PUSH PERMISSION] skipped — unsupported platform', Platform.OS);
     return false;
   }
 
   await ensureAndroidNotificationChannel();
 
   const existing = await Notifications.getPermissionsAsync();
-  devLog('[PUSH PERMISSION]', {
+  logger.info('[PUSH PERMISSION]', {
     status: existing.status,
     canAskAgain: existing.canAskAgain,
     platform: Platform.OS,
@@ -67,7 +67,7 @@ export async function requestPushNotificationPermissions(): Promise<boolean> {
     },
   });
 
-  devLog('[PUSH PERMISSION]', {
+  logger.info('[PUSH PERMISSION]', {
     status: requested.status,
     granted: requested.status === 'granted',
     platform: Platform.OS,
@@ -78,7 +78,7 @@ export async function requestPushNotificationPermissions(): Promise<boolean> {
 
 export async function getCurrentExpoPushToken(): Promise<string | null> {
   if (!isPushSupportedPlatform()) {
-    devLog('[PUSH TOKEN] skipped — web/unsupported platform', Platform.OS);
+    logger.info('[PUSH TOKEN] skipped — web/unsupported platform', Platform.OS);
     return null;
   }
 
@@ -104,14 +104,14 @@ export async function getCurrentExpoPushToken(): Promise<string | null> {
 
   try {
     const tokenResult = await Notifications.getExpoPushTokenAsync({ projectId });
-    devLog('[PUSH] token found', {
+    logger.info('[PUSH] token found', {
       pushTokenPreview: `${tokenResult.data.slice(0, 24)}…`,
       projectId,
       platform: Platform.OS,
     });
     return tokenResult.data;
   } catch (error) {
-    devError('[PUSH] token missing — getExpoPushTokenAsync failed', error);
+    logger.error('[PUSH] token missing — getExpoPushTokenAsync failed', error);
     return null;
   }
 }
@@ -133,7 +133,7 @@ export async function saveUserPushToken(
   try {
     await setDoc(profileRef, payload, { merge: true });
   } catch (error) {
-    devError('[PUSH TOKEN] saveUserPushToken failed', {
+    logger.error('[PUSH TOKEN] saveUserPushToken failed', {
       step: loginStep,
       uid,
       role,
@@ -143,7 +143,7 @@ export async function saveUserPushToken(
     throw error;
   }
 
-  devLog('[PUSH TOKEN] saved', {
+  logger.info('[PUSH TOKEN] saved', {
     uid,
     role,
     collection: collectionName,
@@ -155,7 +155,7 @@ export async function registerForPushNotificationsAsync(
   role: UserRole,
 ): Promise<string | null> {
   if (!isPushSupportedPlatform()) {
-    devLog('[PUSH TOKEN] register skipped — platform', Platform.OS);
+    logger.info('[PUSH TOKEN] register skipped — platform', Platform.OS);
     return null;
   }
 
@@ -171,6 +171,6 @@ export async function registerForPushNotificationsAsync(
   }
 
   await saveUserPushToken(uid, role, token, 'registerForPushNotificationsAsync');
-  devLog('[PUSH] token registered', { uid, role });
+  logger.info('[PUSH] token registered', { uid, role });
   return token;
 }

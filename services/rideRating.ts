@@ -14,7 +14,7 @@ import {
   getRideRatingDocRef,
   getRideRatingsCollectionRef,
 } from '@/firebase/firestore';
-import { devError, devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 export type RideRatingRole = 'client' | 'driver';
 
@@ -143,7 +143,7 @@ export function subscribeRideRatings(
       onRatings(mapRideRatingSnapshot(snapshot));
     },
     (error) => {
-      devError('[RIDE RATING] subscribeRideRatings failed', { rideId: normalizedRideId, error });
+      logger.error('[RIDE RATING] subscribeRideRatings failed', { rideId: normalizedRideId, error });
       onError?.(error);
     },
   );
@@ -298,7 +298,7 @@ export async function sendRideRating(
       return ratingRef.id;
     });
 
-    devLog('[RIDE RATING] rating sent', {
+    logger.info('[RIDE RATING] rating sent', {
       rideId: normalizedRideId,
       ratingDocId,
       fromRole,
@@ -312,7 +312,7 @@ export async function sendRideRating(
       throw error;
     }
 
-    devError('[RIDE RATING] sendRideRating failed', {
+    logger.error('[RIDE RATING] sendRideRating failed', {
       rideId: normalizedRideId,
       fromRole,
       error,

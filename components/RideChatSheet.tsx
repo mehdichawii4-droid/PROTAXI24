@@ -24,7 +24,8 @@ import {
   type RideMessage,
   type RideMessageSenderRole,
 } from '@/services/rideChat';
-import { devError, devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
+import { useIsMountedRef } from '@/utils/safeAsync';
 
 const gold = '#D4A017';
 const green = '#2ECC71';
@@ -59,6 +60,7 @@ export default function RideChatSheet({
   const [draft, setDraft] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const isMountedRef = useIsMountedRef();
 
   const chatOpen = isRideChatOpen(rideStatus);
   const canSend = chatOpen && draft.trim().length > 0 && !isSending;
@@ -68,11 +70,12 @@ export default function RideChatSheet({
       return undefined;
     }
 
-    devLog('[RIDE CHAT] subscribe start', { rideId, senderRole, senderId });
+    logger.info('[RIDE CHAT] subscribe start', { rideId, senderRole, senderId });
     const unsubscribe = subscribeRideMessages(
       rideId,
       (nextMessages) => {
-        devLog('[RIDE CHAT] messages count', {
+        if (!isMountedRef.current) return;
+        logger.info('[RIDE CHAT] messages count', {
           rideId,
           senderRole,
           count: nextMessages.length,
@@ -80,11 +83,12 @@ export default function RideChatSheet({
         setMessages(nextMessages);
       },
       (error) => {
-        devError('[RIDE CHAT] subscribe error', { rideId, senderRole, error });
+        if (!isMountedRef.current) return;
+        logger.error('[RIDE CHAT] subscribe error', { rideId, senderRole, error });
       },
     );
     return unsubscribe;
-  }, [visible, rideId, senderRole, senderId]);
+  }, [visible, rideId, senderRole, senderId, isMountedRef]);
 
   useEffect(() => {
     if (!visible) {
@@ -101,10 +105,11 @@ export default function RideChatSheet({
       readerId: senderId,
       readerRole: senderRole,
     }).catch((error) => {
-      devError('[RIDE CHAT UI] markRideMessagesRead failed', error);
+      if (!isMountedRef.current) return;
+      logger.error('[RIDE CHAT UI] markRideMessagesRead failed', error);
       markedReadSessionRef.current = false;
     });
-  }, [visible, rideId, senderId, senderRole]);
+  }, [visible, rideId, senderId, senderRole, isMountedRef]);
 
   useEffect(() => {
     if (!visible || messages.length === 0) {
@@ -140,9 +145,11 @@ export default function RideChatSheet({
           ? error.message
           : 'Impossible d\'envoyer le message.';
       setSendError(message);
-      devError('[RIDE CHAT UI] send failed', error);
+      logger.error('[RIDE CHAT UI] send failed', error);
     } finally {
-      setIsSending(false);
+      if (isMountedRef.current) {
+        setIsSending(false);
+      }
     }
   };
 

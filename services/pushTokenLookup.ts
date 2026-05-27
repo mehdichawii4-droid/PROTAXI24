@@ -3,7 +3,7 @@ import { db } from '@/firebase/firestore';
 import type { UserCollection } from '@/firebase/types';
 import type { PushPayload, PushTargetRole, PushTokenRecord } from '@/types/pushV2';
 import { collectionForRole } from '@/services/authUtils';
-import { devError, devLog } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 function roleToCollection(role: PushTargetRole): UserCollection {
   if (role === 'staff') {
@@ -34,9 +34,9 @@ export async function getPushTokenForUid(
   } catch (error) {
     const code = (error as { code?: string })?.code;
     if (code === 'permission-denied') {
-      devLog('[PUSH TOKEN LOOKUP] getPushTokenForUid denied', { uid, role });
+      logger.info('[PUSH TOKEN LOOKUP] getPushTokenForUid denied', { uid, role });
     } else {
-      devError('[PUSH TOKEN LOOKUP] getPushTokenForUid failed', { uid, role, error });
+      logger.error('[PUSH TOKEN LOOKUP] getPushTokenForUid failed', { uid, role, error });
     }
     return null;
   }
@@ -72,7 +72,7 @@ export async function lookupTokensForPayload(payload: PushPayload): Promise<stri
     return records.map((record) => record.token).filter((token): token is string => Boolean(token));
   }
 
-  devLog('[PUSH TOKEN LOOKUP] role-based targets deferred to Cloud Function', {
+  logger.info('[PUSH TOKEN LOOKUP] role-based targets deferred to Cloud Function', {
     eventType: payload.eventType,
     targetRoles: payload.targetRoles,
   });

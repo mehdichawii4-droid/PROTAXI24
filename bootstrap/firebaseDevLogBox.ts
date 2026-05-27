@@ -1,5 +1,5 @@
 import { LogBox } from 'react-native';
-import { devError } from '@/utils/devLog';
+import { logger } from '@/services/logger';
 
 function isFirebasePermissionDenied(error: unknown): boolean {
   if (!error) return false;
@@ -40,7 +40,7 @@ export function installFirebaseDevLogBoxSilencing() {
       allRejections: true,
       onUnhandled: (_id, error) => {
         if (isFirebasePermissionDenied(error)) {
-          devError('[PROMISE DENIED - bootstrap - globalUnhandledRejection]', error);
+          logger.error('[PROMISE DENIED - bootstrap - globalUnhandledRejection]', error);
         }
       },
       onHandled: () => {},

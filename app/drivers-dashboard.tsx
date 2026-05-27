@@ -27,7 +27,6 @@ import {
   StyleSheet,
   Switch,
   Text,
-  ToastAndroid,
   TouchableOpacity,
   Vibration,
   View,
@@ -74,6 +73,7 @@ import {
   isRideChatOpen,
   normalizeRideChatUnread,
 } from '@/services/rideChat';
+import { showUserError, showUserSuccess } from '@/services/userFeedback';
 import {
   buildMapCoordinate,
   haversineDistanceMeters,
@@ -139,11 +139,7 @@ function getGpsTrackingProfile(isBusy: boolean): GpsTrackingProfile {
 }
 
 function showDriverToast(message: string) {
-  if (Platform.OS === 'android') {
-    ToastAndroid.show(message, ToastAndroid.SHORT);
-    return;
-  }
-  Alert.alert(message);
+  showUserSuccess(message);
 }
 
 const DEFAULT_DRIVER_LOCATION = {
@@ -1283,7 +1279,7 @@ export default function DriversDashboardScreen() {
         error instanceof RidePaymentError
           ? error.message
           : 'Impossible de confirmer le paiement.';
-      Alert.alert('Paiement', message);
+      showUserError(message, 'Paiement');
       devError('[RIDE PAYMENT] confirm failed', { rideId, driverUid, error });
     } finally {
       setConfirmingPaymentId(null);
@@ -1420,7 +1416,7 @@ export default function DriversDashboardScreen() {
 
     } catch (error) {
       devError('[RIDE STATE] updateRideStatus failed', { rideId, finalStatus, driverUid, error });
-      Alert.alert('Erreur', 'Impossible de mettre à jour le statut de la course.');
+      showUserError('Impossible de mettre à jour le statut de la course.');
     }
   };
 

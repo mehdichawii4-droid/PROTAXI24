@@ -21,7 +21,8 @@ import {
   sendRideRating,
   type RideRatingRole,
 } from '@/services/rideRating';
-import { devError } from '@/utils/devLog';
+import { logger } from '@/services/logger';
+import { useIsMountedRef } from '@/utils/safeAsync';
 
 const gold = '#D4A017';
 const green = '#2ECC71';
@@ -73,6 +74,7 @@ export default function RideRatingSheet({
   const [savedStars, setSavedStars] = useState<number | null>(existingStars);
   const [savedComment, setSavedComment] = useState(existingComment);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isMountedRef = useIsMountedRef();
 
   const title =
     fromRole === 'client' ? 'Noter votre chauffeur' : 'Noter le client';
@@ -106,11 +108,13 @@ export default function RideRatingSheet({
     setIsChecking(true);
     void hasRideRating(rideId, fromRole, fromUserId)
       .then((exists) => {
-        if (!exists) return;
+        if (!isMountedRef.current || !exists) return;
         setAlreadyRated(true);
       })
       .finally(() => {
-        setIsChecking(false);
+        if (isMountedRef.current) {
+          setIsChecking(false);
+        }
       });
   }, [
     visible,
@@ -119,6 +123,7 @@ export default function RideRatingSheet({
     fromRole,
     existingStars,
     existingComment,
+    isMountedRef,
   ]);
 
   const handleSubmit = async () => {
@@ -151,9 +156,11 @@ export default function RideRatingSheet({
           ? error.message
           : 'Impossible d\'envoyer votre avis.';
       setErrorMessage(message);
-      devError('[RIDE RATING UI] submit failed', error);
+      logger.error('[RIDE RATING UI] submit failed', error);
     } finally {
-      setIsSubmitting(false);
+      if (isMountedRef.current) {
+        setIsSubmitting(false);
+      }
     }
   };
 
