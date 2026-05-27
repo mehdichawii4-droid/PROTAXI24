@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import type { Href, Router } from 'expo-router';
+import { Platform } from 'react-native';
 import { devLog } from '@/utils/devLog';
 
 export const DRIVER_RIDE_ASSIGNED_EVENT = 'taxi_ride_assigned';
@@ -129,6 +130,10 @@ export function handlePushNotificationTap(
 }
 
 export async function handleColdStartNotificationTap(router: Router) {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
   const lastResponse = await Notifications.getLastNotificationResponseAsync();
   if (!lastResponse) {
     return;
@@ -139,6 +144,11 @@ export async function handleColdStartNotificationTap(router: Router) {
 }
 
 export function setupPushNotificationRouting(router: Router): () => void {
+  if (Platform.OS === 'web') {
+    devLog('[PUSH] routing disabled on web');
+    return () => {};
+  }
+
   void handleColdStartNotificationTap(router);
 
   const responseSubscription = Notifications.addNotificationResponseReceivedListener(

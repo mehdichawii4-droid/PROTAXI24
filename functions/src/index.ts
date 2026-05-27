@@ -780,4 +780,5 @@ export const onRideAssignmentTimeout = onSchedule(
 );
 
 export { onRideCreatedAutoDispatch } from './autoDispatch';
+export { onRideMessageCreatedPush } from './onRideMessageCreatedPush';
 export { onRideRatingCreated } from './rideRating';

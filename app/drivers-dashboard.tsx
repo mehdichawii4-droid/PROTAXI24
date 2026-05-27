@@ -58,6 +58,7 @@ import {
   getRidePaymentStatusConfig,
   getRidePaymentStatusLabel,
   normalizeRidePayment,
+  normalizeRidePaymentStatus,
   RidePaymentError,
 } from '@/services/ridePayment';
 import {
@@ -369,6 +370,7 @@ export default function DriversDashboardScreen() {
   const [driverRateRide, setDriverRateRide] = useState<any | null>(null);
   const [driverRateVisible, setDriverRateVisible] = useState(false);
   const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
+  const [localPaidRideIds, setLocalPaidRideIds] = useState<string[]>([]);
   const [revenueModalVisible, setRevenueModalVisible] = useState(false);
 
   const [driverLocation, setDriverLocation] = useState(DEFAULT_DRIVER_LOCATION);
@@ -376,7 +378,24 @@ export default function DriversDashboardScreen() {
 
   const mapRef = useRef<DriverLiveMapRef | null>(null);
   const ridesRef = useRef<any[]>([]);
+  const localPaidRideIdsRef = useRef<string[]>([]);
   const onlineRef = useRef(true);
+
+  useEffect(() => {
+    localPaidRideIdsRef.current = localPaidRideIds;
+  }, [localPaidRideIds]);
+
+  const applyLocalPaidOverlay = (ride: any) => {
+    if (!ride?.id || !localPaidRideIdsRef.current.includes(ride.id)) {
+      return ride;
+    }
+
+    return {
+      ...ride,
+      paymentStatus: 'paid',
+      confirmedByDriverId: driverUid,
+    };
+  };
   const notifiedRef = useRef<Set<string>>(new Set());
   const waitingTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const lastGpsSyncRef = useRef(0);
@@ -665,9 +684,27 @@ export default function DriversDashboardScreen() {
         assignedRidesRef.current,
         unassignedRidesRef.current,
       );
-      const driverRides = ridesData.filter((ride) =>
+      const visibleRides = ridesData.filter((ride) =>
         isRideVisibleToDriver(ride, driverUid),
       );
+
+      const confirmedOnServer = visibleRides
+        .filter(
+          (ride) =>
+            localPaidRideIdsRef.current.includes(ride.id)
+            && normalizeRidePaymentStatus(ride.paymentStatus) === 'paid',
+        )
+        .map((ride) => ride.id);
+
+      if (confirmedOnServer.length > 0) {
+        const nextLocalPaidIds = localPaidRideIdsRef.current.filter(
+          (id) => !confirmedOnServer.includes(id),
+        );
+        localPaidRideIdsRef.current = nextLocalPaidIds;
+        setLocalPaidRideIds(nextLocalPaidIds);
+      }
+
+      const driverRides = visibleRides.map((ride) => applyLocalPaidOverlay(ride));
 
       driverRides.forEach((ride) => {
         const status = normalizeStatus(ride.status);
@@ -917,11 +954,15 @@ export default function DriversDashboardScreen() {
   );
 
   const paymentPendingRide = useMemo(() => {
-    const pending = rides.filter(
-      (ride) =>
+    const pending = rides.filter((ride) => {
+      const payment = normalizeRidePayment(ride);
+      return (
         normalizeStatus(ride.status) === 'Terminée'
-        && canConfirmCashPayment(ride, driverUid),
-    );
+        && payment.paymentStatus === 'pending'
+        && payment.paymentMethod === 'cash'
+        && String(ride.driverId || '').trim() === driverUid
+      );
+    });
 
     if (pending.length === 0) {
       return null;
@@ -932,7 +973,7 @@ export default function DriversDashboardScreen() {
       const bTime = b.finishedAt?.toDate?.()?.getTime?.() ?? 0;
       return bTime - aTime;
     })[0];
-  }, [rides, driverUid]);
+  }, [rides, driverUid, localPaidRideIds]);
 
   const currentRide = useMemo(() => {
     if (activeRide) return activeRide;
@@ -1135,6 +1176,18 @@ export default function DriversDashboardScreen() {
     try {
       await confirmCashPayment(rideId, driverUid);
       devLog('[RIDE PAYMENT] confirm success', { rideId, driverUid });
+
+      const nextLocalPaidIds = localPaidRideIdsRef.current.includes(rideId)
+        ? localPaidRideIdsRef.current
+        : [...localPaidRideIdsRef.current, rideId];
+      localPaidRideIdsRef.current = nextLocalPaidIds;
+      setLocalPaidRideIds(nextLocalPaidIds);
+
+      const patchRidePaymentPaid = (ride: any) => applyLocalPaidOverlay(ride);
+
+      setRides((prev) => prev.map(patchRidePaymentPaid));
+      ridesRef.current = ridesRef.current.map(patchRidePaymentPaid);
+
       showDriverToast('Paiement enregistré');
     } catch (error) {
       const message =
@@ -2125,6 +2178,16 @@ function CurrentRideCockpit({
   const showConfirmPayment = canConfirmCashPayment(ride, driverUid);
   const collectLabel = formatRidePaymentAmount(payment.fareAmount);
   const distance = getSimulatedDistance(ride);
+
+  useEffect(() => {
+    devLog('[RIDE PAYMENT] cockpit render', {
+      rideId: ride?.id,
+      paymentStatus: payment.paymentStatus,
+      rawPaymentStatus: ride?.paymentStatus,
+      paidAt: ride?.paidAt ?? null,
+    });
+  }, [ride?.id, payment.paymentStatus, ride?.paymentStatus, ride?.paidAt]);
+
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(18)).current;
   const statusPulse = useRef(new Animated.Value(0.4)).current;

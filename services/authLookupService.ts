@@ -1,4 +1,4 @@
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@firebase/functions';
 import { functions } from '@/firebase/functionsInstance';
 
 type ResolveLoginIdentifierRequest = {

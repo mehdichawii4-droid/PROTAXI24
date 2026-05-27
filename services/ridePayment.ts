@@ -247,6 +247,15 @@ export async function confirmCashPayment(
       driverId: normalizedDriverId,
       error,
     });
+
+    const code = String((error as { code?: string })?.code ?? '');
+    if (code === 'permission-denied') {
+      throw new RidePaymentError(
+        'permission_denied',
+        'Permission refusée pour confirmer le paiement.',
+      );
+    }
+
     throw error;
   }
 }

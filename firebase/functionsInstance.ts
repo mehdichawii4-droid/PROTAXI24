@@ -1,4 +1,4 @@
-import { getFunctions } from 'firebase/functions';
+import { getFunctions } from '@firebase/functions';
 import { app } from './app';
 
 export const functions = getFunctions(app, 'europe-west1');

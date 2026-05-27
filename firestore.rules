@@ -281,7 +281,7 @@ service cloud.firestore {
         && request.resource.data.driverId == resource.data.driverId
         && request.resource.data.paymentStatus == 'paid'
         && request.resource.data.confirmedByDriverId == request.auth.uid
-        && request.resource.data.paidAt == request.time
+        && request.resource.data.paidAt is timestamp
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'paymentStatus',
           'paidAt',
