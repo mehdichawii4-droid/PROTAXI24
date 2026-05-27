@@ -363,12 +363,26 @@ export default function CityScreen() {
 
     setIsSubmitting(true);
     try {
+      const rideData = {
+        departure: pickup,
+        destination: finalDestination,
+        selectedVehicle: vehicleType,
+        estimatedPrice,
+        estimatedDuration: baseEtaMin,
+        createdAt: new Date().toISOString(),
+        status: 'En attente' as const,
+      };
+
+      if (rideMode === 'Maintenant') {
+        await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
+      }
+
       const result = await submitCityRide(
         {
           service: 'Ville 24H',
           destinationType,
-          departure: pickup,
-          destination: finalDestination,
+          departure: rideData.departure,
+          destination: rideData.destination,
           rideMode,
           date:
             rideMode === 'Réserver plus tard'
@@ -388,6 +402,9 @@ export default function CityScreen() {
           phone: phone || 'Non renseigné',
           notes: notes || 'Aucune note',
           price: formattedPrice,
+          vehicleType: rideData.selectedVehicle,
+          estimatedDuration: rideData.estimatedDuration,
+          estimatedPrice: rideData.estimatedPrice,
         },
         {
           clientUid: getFirebaseAuth().currentUser?.uid,

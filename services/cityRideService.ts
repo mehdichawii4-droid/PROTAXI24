@@ -21,6 +21,9 @@ export type CityRideInput = {
   phone?: string;
   notes?: string;
   price: string;
+  vehicleType?: string;
+  estimatedDuration?: number;
+  estimatedPrice?: number;
   partnerId?: string;
   partnerName?: string;
 };
@@ -127,6 +130,9 @@ export async function submitCityRide(
       bags: String(input.bags || '0'),
       rideMode: 'Maintenant',
       status: 'En attente',
+      vehicleType: String(input.vehicleType || ''),
+      estimatedDuration: input.estimatedDuration ?? 0,
+      estimatedPrice: input.estimatedPrice ?? 0,
       driverName: '',
       driverPhone: '',
       driverCar: '',
@@ -152,6 +158,9 @@ export async function submitCityRide(
         time: 'Maintenant',
         price: priceClean,
         status: 'En attente',
+        vehicleType: String(input.vehicleType || ''),
+        estimatedDuration: String(input.estimatedDuration ?? ''),
+        estimatedPrice: String(input.estimatedPrice ?? ''),
       },
     });
 

@@ -49,6 +49,7 @@ const SPRING = { damping: 24, stiffness: 220, mass: 0.85 };
 const HANDLE_ZONE_PX = 28;
 const HERO_ROW_PX = 80;
 const BOTTOM_BLOCK_PX = 236;
+const BOTTOM_GLIDE_PX = 100;
 
 const SNAP_INDEX = {
   collapsed: 0,
@@ -68,6 +69,20 @@ function sheetProgress(height: number): number {
     [0, 1],
     Extrapolation.CLAMP,
   );
+}
+
+function readSheetProgress(
+  progressShared: SharedValue<number> | undefined,
+  heightDerived: SharedValue<number>,
+): number {
+  'worklet';
+  if (progressShared) return progressShared.value;
+  return sheetProgress(heightDerived.value);
+}
+
+function earlySheetProgress(progress: number): number {
+  'worklet';
+  return interpolate(progress, [0, 0.25, 1], [0, 1, 1], Extrapolation.CLAMP);
 }
 
 function snapIndexForHeight(target: number): number {
@@ -384,14 +399,43 @@ export default function CityVehicleBottomSheet({
   );
 
   const listPaneStyle = useAnimatedStyle(() => {
+    const progress = readSheetProgress(sheetProgressShared, sheetHeightDerived);
+    const earlyProgress = earlySheetProgress(progress);
     const bodyH = Math.max(0, sheetHeightDerived.value - handleZoneHeight.value);
-    const listH = Math.max(0, bodyH - heroRowHeight.value - bottomBlockHeight.value);
+    const maxListH = Math.max(0, bodyH - heroRowHeight.value - bottomBlockHeight.value);
+    const footerOffset = progress * BOTTOM_GLIDE_PX;
+    const listH = Math.max(0, earlyProgress * maxListH - footerOffset);
     return {
+      flex: 0,
+      flexGrow: 0,
       height: listH,
-      maxHeight: listH,
       minHeight: 0,
-      opacity: interpolate(listH, [0, 16], [0, 1], Extrapolation.CLAMP),
+      opacity: interpolate(earlyProgress, [0, 0.03], [0, 1], Extrapolation.CLAMP),
       overflow: 'hidden',
+    };
+  });
+
+  const bottomBlockGlideStyle = useAnimatedStyle(() => {
+    const progress = sheetProgressShared?.value ?? sheetProgress(sheetHeightDerived.value);
+    const earlyProgress = earlySheetProgress(progress);
+
+    return {
+      transform: [
+        {
+          translateY: interpolate(
+            progress,
+            [0, 1],
+            [0, BOTTOM_GLIDE_PX],
+            Extrapolation.CLAMP,
+          ),
+        },
+      ],
+      marginTop: interpolate(
+        earlyProgress,
+        [0, 1],
+        [0, 14],
+        Extrapolation.CLAMP,
+      ),
     };
   });
 
@@ -503,8 +547,13 @@ export default function CityVehicleBottomSheet({
             </BottomSheetScrollView>
           </Animated.View>
 
-          <View
-            style={[styles.bottomBlock, styles.bottomFooter, { paddingBottom: footerPad }]}
+          <Animated.View
+            style={[
+              styles.bottomBlock,
+              styles.bottomFooter,
+              bottomBlockGlideStyle,
+              { paddingBottom: footerPad },
+            ]}
             onLayout={(event) => onBottomBlockLayout(event.nativeEvent.layout.height)}
           >
             <View style={styles.optionsGrid}>
@@ -548,11 +597,16 @@ export default function CityVehicleBottomSheet({
               disabled={isSubmitting}
               activeOpacity={0.9}
             >
-              <Text style={styles.commanderText}>
-                {isSubmitting ? 'Envoi…' : 'Commander'}
-              </Text>
+              {isSubmitting ? (
+                <View style={styles.commanderBtnContent}>
+                  <ActivityIndicator color="#111" size="small" />
+                  <Text style={styles.commanderText}>Recherche d&apos;un chauffeur...</Text>
+                </View>
+              ) : (
+                <Text style={styles.commanderText}>Commander</Text>
+              )}
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         </BottomSheetView>
       </BottomSheet>
     </View>
@@ -642,7 +696,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   listScroll: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    minHeight: 0,
   },
   listContent: {
     paddingTop: 4,
@@ -922,6 +977,11 @@ const styles = StyleSheet.create({
   },
   commanderBtnPending: {
     opacity: 0.72,
+  },
+  commanderBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   commanderText: {
     color: '#111',
