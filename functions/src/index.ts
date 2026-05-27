@@ -161,34 +161,62 @@ async function readDriverExpoPushToken(driverId: string): Promise<string | null>
   const snapshot = await admin.firestore().doc(`drivers/${driverId}`).get();
 
   if (!snapshot.exists) {
-    logger.warn('[PUSH FN] driver profile not found', { driverId });
+    logger.warn('[PUSH FN] token missing', {
+      driverId,
+      collection: 'drivers',
+      reason: 'profile_not_found',
+    });
     return null;
   }
 
   const token = snapshot.data()?.expoPushToken;
   if (typeof token !== 'string' || !token.trim()) {
-    logger.warn('[PUSH FN] driver expoPushToken missing', { driverId });
+    logger.warn('[PUSH FN] token missing', {
+      driverId,
+      collection: 'drivers',
+      reason: 'expoPushToken_empty',
+    });
     return null;
   }
 
-  return token.trim();
+  const trimmed = token.trim();
+  logger.info('[PUSH FN] token found', {
+    driverId,
+    collection: 'drivers',
+    pushTokenPreview: `${trimmed.slice(0, 24)}…`,
+  });
+  return trimmed;
 }
 
 async function readClientExpoPushToken(clientUid: string): Promise<string | null> {
   const snapshot = await admin.firestore().doc(`users/${clientUid}`).get();
 
   if (!snapshot.exists) {
-    logger.warn('[PUSH FN] client profile not found', { clientUid });
+    logger.warn('[PUSH FN] token missing', {
+      clientUid,
+      collection: 'users',
+      reason: 'profile_not_found',
+    });
     return null;
   }
 
   const token = snapshot.data()?.expoPushToken;
   if (typeof token !== 'string' || !token.trim()) {
-    logger.warn('[PUSH FN] client expoPushToken missing', { clientUid });
+    logger.warn('[PUSH FN] token missing', {
+      clientUid,
+      collection: 'users',
+      reason: 'expoPushToken_empty',
+    });
     return null;
   }
 
-  return token.trim();
+  const trimmed = token.trim();
+  logger.info('[PUSH FN] token found', {
+    clientUid,
+    collection: 'users',
+    pushTokenPreview: `${trimmed.slice(0, 24)}…`,
+  });
+  return trimmed;
 }
 
 function findClientTransition(
@@ -252,7 +280,7 @@ async function sendExpoPush(params: {
     },
   };
 
-  logger.info('[PUSH FN] sending Expo push', {
+  logger.info('[PUSH FN] push sent — requesting Expo ticket', {
     rideId,
     recipientRole,
     recipientId,
@@ -266,12 +294,18 @@ async function sendExpoPush(params: {
     const tickets = await expo.sendPushNotificationsAsync([message]);
 
     const firstTicket = tickets[0];
-    logger.info('[PUSH FN] Expo push sent', {
+    logger.info('[PUSH FN] push sent', {
       rideId,
       recipientRole,
       recipientId,
       eventType,
       ticketCount: tickets.length,
+    });
+    logger.info('[PUSH FN] expo ticket', {
+      rideId,
+      recipientRole,
+      recipientId,
+      eventType,
       ticketStatus: firstTicket?.status ?? null,
       ticketId: firstTicket?.status === 'ok' ? firstTicket.id : null,
       ticketMessage:
@@ -324,6 +358,12 @@ export const onRideUpdatedPush = onDocumentUpdated(
     }
 
     if (beforeStatus === 'En attente' && afterStatus === 'Attribuée') {
+      logger.info('[PUSH FN] trigger fired', {
+        rideId,
+        transition: 'En attente → Attribuée',
+        driverId: after.driverId ?? null,
+      });
+
       const driverId = String(after.driverId ?? '').trim();
       if (!driverId) {
         logger.warn('[PUSH FN] skip — missing driverId on assigned ride', { rideId });
@@ -332,6 +372,7 @@ export const onRideUpdatedPush = onDocumentUpdated(
 
       const pushToken = await readDriverExpoPushToken(driverId);
       if (!pushToken) {
+        logger.warn('[PUSH FN] push skipped — token missing', { rideId, driverId });
         return;
       }
 
@@ -628,7 +669,7 @@ export const onRideAssignmentTimeout = onSchedule(
           const updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
           if (redispatchCount >= MAX_AUTO_REDISPATCH) {
-            transaction.update(rideDoc.ref, {
+            const expireUpdate: Record<string, unknown> = {
               status: 'Expirée',
               driverId: '',
               driverName: '',
@@ -639,12 +680,16 @@ export const onRideAssignmentTimeout = onSchedule(
               redispatchCount,
               expiredAt: updatedAt,
               updatedAt,
-            });
+            };
+            if (driverId) {
+              expireUpdate.rejectedDriverIds = admin.firestore.FieldValue.arrayUnion(driverId);
+            }
+            transaction.update(rideDoc.ref, expireUpdate);
             await releaseDriverLive(transaction, driverId);
             return 'expired';
           }
 
-          transaction.update(rideDoc.ref, {
+          const returnUpdate: Record<string, unknown> = {
             status: 'En attente',
             driverId: '',
             driverName: '',
@@ -655,12 +700,23 @@ export const onRideAssignmentTimeout = onSchedule(
             redispatchCount,
             lastAutoRedispatchAt: updatedAt,
             updatedAt,
-          });
+          };
+          if (driverId) {
+            returnUpdate.rejectedDriverIds = admin.firestore.FieldValue.arrayUnion(driverId);
+          }
+          transaction.update(rideDoc.ref, returnUpdate);
           await releaseDriverLive(transaction, driverId);
           return 'returned';
         });
 
         if (outcome === 'returned') {
+          if (driverId) {
+            logger.info('[DISPATCH V2] timeout_rejected', {
+              rideId,
+              driverId,
+              redispatchCount,
+            });
+          }
           logger.info('[REDISPATCH AUTO] returned to admin pool', {
             rideId,
             driverId,

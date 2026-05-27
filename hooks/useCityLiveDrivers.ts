@@ -25,6 +25,15 @@ export type CityLiveDriverCard = {
   available: boolean;
 };
 
+export type CityLiveMapDriver = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  heading: number | null;
+  driverName: string;
+  etaMin: number;
+};
+
 const VEHICLE_KEYWORDS: [RegExp, CityVehicleId][] = [
   [/access\+|access coffre/i, 'Access Coffre+'],
   [/access/i, 'Access Standard'],
@@ -158,34 +167,55 @@ export function useCityLiveDrivers(options: {
     return unsubscribe;
   }, [visible]);
 
-  const liveCards = useMemo((): CityLiveDriverCard[] => {
+  const { liveCards, liveMapDrivers } = useMemo(() => {
     const pickup = clientCoordinate ?? { latitude: 36.462, longitude: 7.426 };
 
-    return liveDocs
+    const entries = liveDocs
       .filter(isLiveDriverEligible)
       .map((driver) => {
         const carLabel = resolveCarLabel(driver);
         const vehicleId = inferVehicleIdFromLabel(carLabel);
         const vehicleDef = getVehicleDef(vehicleId);
-        const distanceMeters = haversineDistanceMeters(pickup, {
-          latitude: driver.latitude as number,
-          longitude: driver.longitude as number,
-        });
+        const latitude = driver.latitude as number;
+        const longitude = driver.longitude as number;
+        const distanceMeters = haversineDistanceMeters(pickup, { latitude, longitude });
         const etaMin = estimatePickupEtaMinutes(distanceMeters, baseEtaMin);
+        const id = String(driver.id || driver.driverId);
+        const driverName = String(driver.driverName || driver.name || 'Chauffeur PROTAXI');
+        const resolvedEta = Math.max(5, etaMin + (vehicleDef.etaOffset ?? 0));
+        const heading =
+          typeof driver.heading === 'number' && Number.isFinite(driver.heading)
+            ? driver.heading
+            : null;
 
         return {
-          id: String(driver.id || driver.driverId),
-          driverId: String(driver.driverId || driver.id),
-          driverName: String(driver.driverName || driver.name || 'Chauffeur PROTAXI'),
-          vehicleId,
-          vehicleDef,
-          carLabel,
-          etaMin: Math.max(5, etaMin + (vehicleDef.etaOffset ?? 0)),
-          distanceMeters,
-          available: vehicleDef.available,
+          card: {
+            id,
+            driverId: String(driver.driverId || driver.id),
+            driverName,
+            vehicleId,
+            vehicleDef,
+            carLabel,
+            etaMin: resolvedEta,
+            distanceMeters,
+            available: vehicleDef.available,
+          } satisfies CityLiveDriverCard,
+          marker: {
+            id,
+            latitude,
+            longitude,
+            heading,
+            driverName,
+            etaMin: resolvedEta,
+          } satisfies CityLiveMapDriver,
         };
       })
-      .sort((left, right) => left.distanceMeters - right.distanceMeters);
+      .sort((left, right) => left.card.distanceMeters - right.card.distanceMeters);
+
+    return {
+      liveCards: entries.map((entry) => entry.card),
+      liveMapDrivers: entries.map((entry) => entry.marker),
+    };
   }, [baseEtaMin, clientCoordinate, liveDocs]);
 
   const fallbackVehicleIds = useMemo(() => {
@@ -195,6 +225,7 @@ export function useCityLiveDrivers(options: {
 
   return {
     liveCards,
+    liveMapDrivers,
     fallbackVehicleIds,
     loading,
     hasLiveDrivers: liveCards.length > 0,

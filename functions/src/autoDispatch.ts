@@ -13,6 +13,8 @@ type DriversLiveDoc = {
   currentRideId?: string;
   latitude?: number;
   longitude?: number;
+  locationUpdatedAt?: admin.firestore.Timestamp | Date | string | number;
+  updatedAt?: admin.firestore.Timestamp | Date | string | number;
   driverName?: string;
   name?: string;
   driverPhone?: string;
@@ -43,6 +45,10 @@ type AssignRideInput = {
 };
 
 const DEFAULT_GUELMA = { latitude: 36.462, longitude: 7.426 };
+/** GPS older than this is excluded from auto-dispatch (3 min). */
+const GPS_STALE_MS = 180_000;
+/** Adds up to ~3 km equivalent penalty as GPS ages toward stale threshold. */
+const GPS_FRESHNESS_PENALTY_PER_SEC = 1;
 
 class AutoDispatchError extends Error {
   code: string;
@@ -75,21 +81,107 @@ function hasAssignedDriverId(driverId: unknown): boolean {
   return String(driverId || '').trim().length > 0;
 }
 
-function isDriverEligibleForDispatch(
-  liveDriver: DriversLiveDoc,
-  profile?: DriversProfileDoc | null,
-): boolean {
-  if (!liveDriver.isOnline) return false;
-  if (liveDriver.isBusy) return false;
+type DispatchRejectReason =
+  | 'unregistered'
+  | 'timeout_rejected'
+  | 'offline'
+  | 'busy'
+  | 'availability'
+  | 'current_ride'
+  | 'profile_missing'
+  | 'not_approved'
+  | 'suspended'
+  | 'missing_coordinates'
+  | 'stale_gps';
 
-  const availability = liveDriver.availability;
-  if (availability && availability !== 'available') return false;
-  if (String(liveDriver.currentRideId || '').trim()) return false;
-  if (!profile) return false;
-  if (profile.isApproved === false) return false;
-  if (profile.isSuspended === true) return false;
+function readLocationTimestampMs(value: unknown): number | null {
+  if (!value) return null;
+  if (value instanceof admin.firestore.Timestamp) {
+    return value.toMillis();
+  }
+  if (typeof value === 'object' && value !== null && 'toDate' in value) {
+    const date = (value as { toDate: () => Date }).toDate();
+    return Number.isFinite(date.getTime()) ? date.getTime() : null;
+  }
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const ms = new Date(value).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
 
-  return true;
+function getDriverLocationUpdatedAtMs(liveDriver: DriversLiveDoc): number {
+  const candidates = [liveDriver.locationUpdatedAt, liveDriver.updatedAt];
+  for (const value of candidates) {
+    const ms = readLocationTimestampMs(value);
+    if (ms != null) return ms;
+  }
+  return 0;
+}
+
+function getGpsAgeMs(liveDriver: DriversLiveDoc, nowMs: number): number {
+  const updatedAtMs = getDriverLocationUpdatedAtMs(liveDriver);
+  if (updatedAtMs <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(0, nowMs - updatedAtMs);
+}
+
+function isGpsStale(liveDriver: DriversLiveDoc, nowMs: number): boolean {
+  return getGpsAgeMs(liveDriver, nowMs) > GPS_STALE_MS;
+}
+
+function hasValidCoordinates(liveDriver: DriversLiveDoc): boolean {
+  const lat = Number(liveDriver.latitude);
+  const lng = Number(liveDriver.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lng);
+}
+
+function getDispatchRejectReason(
+  candidate: AssignNearestDriverCandidate,
+  driverId: string,
+  profile: DriversProfileDoc | undefined,
+  rejectedSet: Set<string>,
+  nowMs: number,
+): DispatchRejectReason | null {
+  if (!driverId) return 'unregistered';
+  if (rejectedSet.has(driverId)) return 'timeout_rejected';
+  if (!candidate.isOnline) return 'offline';
+  if (candidate.isBusy) return 'busy';
+
+  const availability = candidate.availability;
+  if (availability && availability !== 'available') return 'availability';
+  if (String(candidate.currentRideId || '').trim()) return 'current_ride';
+  if (!profile) return 'profile_missing';
+  if (profile.isApproved === false) return 'not_approved';
+  if (profile.isSuspended === true) return 'suspended';
+  if (!hasValidCoordinates(candidate)) return 'missing_coordinates';
+  if (isGpsStale(candidate, nowMs)) return 'stale_gps';
+
+  return null;
+}
+
+function computeDispatchScoreV2(
+  rideCoords: { latitude: number; longitude: number },
+  candidate: AssignNearestDriverCandidate,
+  nowMs: number,
+): { score: number; distanceM: number; gpsAgeMs: number } {
+  const distanceM = haversineDistanceMeters(rideCoords, {
+    latitude: Number(candidate.latitude),
+    longitude: Number(candidate.longitude),
+  });
+  const gpsAgeMs = getGpsAgeMs(candidate, nowMs);
+  const freshnessPenaltyM =
+    Number.isFinite(gpsAgeMs) && gpsAgeMs < Number.POSITIVE_INFINITY
+      ? (gpsAgeMs / 1000) * GPS_FRESHNESS_PENALTY_PER_SEC
+      : 0;
+
+  return {
+    score: distanceM + freshnessPenaltyM,
+    distanceM,
+    gpsAgeMs: Number.isFinite(gpsAgeMs) ? gpsAgeMs : -1,
+  };
 }
 
 function isLiveDriverAvailable(liveData: Record<string, unknown> | undefined): boolean {
@@ -201,6 +293,14 @@ async function assignRideToDriverAdmin(
       throw new AutoDispatchError('driver_not_available', 'Ce chauffeur est indisponible.');
     }
 
+    const liveDriver = (liveData ?? {}) as DriversLiveDoc;
+    if (!hasValidCoordinates(liveDriver)) {
+      throw new AutoDispatchError('driver_stale_gps', 'Position chauffeur indisponible.');
+    }
+    if (isGpsStale(liveDriver, Date.now())) {
+      throw new AutoDispatchError('driver_stale_gps', 'Position GPS trop ancienne.');
+    }
+
     if (profileSnap.exists) {
       assertDriverProfileEligible(profileSnap.data() as Record<string, unknown>);
     }
@@ -266,57 +366,86 @@ async function autoDispatchNearestEligibleDriver(params: {
   db: admin.firestore.Firestore;
   rideId: string;
   ride: Record<string, unknown>;
-}): Promise<{ driverId: string; driverName: string; distanceM: number }> {
+}): Promise<{ driverId: string; driverName: string; distanceM: number; score: number; gpsAgeMs: number }> {
   const rideCoords = getRideCoordinates(params.ride);
   const rejectedDriverIds = Array.isArray(params.ride.rejectedDriverIds)
     ? params.ride.rejectedDriverIds.map(String)
     : [];
+  const nowMs = Date.now();
 
   const { candidates, profileByDriverId } = await loadDispatchContext(params.db);
   const rejectedSet = new Set(rejectedDriverIds);
 
-  const eligibleCandidates = candidates.filter((candidate) => {
-    const driverId = resolveRegisteredDriverId(candidate, profileByDriverId);
-    if (!driverId) return false;
-    if (rejectedSet.has(driverId)) return false;
-    const profile = profileByDriverId.get(driverId);
-    return isDriverEligibleForDispatch(candidate, profile);
-  });
+  const scoredCandidates: Array<{
+    candidate: AssignNearestDriverCandidate;
+    driverId: string;
+    score: number;
+    distanceM: number;
+    gpsAgeMs: number;
+  }> = [];
 
-  if (eligibleCandidates.length === 0) {
+  for (const candidate of candidates) {
+    const driverId = resolveRegisteredDriverId(candidate, profileByDriverId);
+    const profile = driverId ? profileByDriverId.get(driverId) : undefined;
+    const rejectReason = getDispatchRejectReason(
+      candidate,
+      driverId,
+      profile,
+      rejectedSet,
+      nowMs,
+    );
+
+    if (rejectReason) {
+      if (driverId) {
+        logger.info('[DISPATCH V2] candidate rejected', {
+          rideId: params.rideId,
+          driverId,
+          reason: rejectReason,
+        });
+      }
+      continue;
+    }
+
+    const { score, distanceM, gpsAgeMs } = computeDispatchScoreV2(rideCoords, candidate, nowMs);
+    scoredCandidates.push({
+      candidate,
+      driverId,
+      score,
+      distanceM,
+      gpsAgeMs,
+    });
+  }
+
+  if (scoredCandidates.length === 0) {
+    logger.info('[DISPATCH V2] no_eligible_candidates', {
+      rideId: params.rideId,
+      totalLive: candidates.length,
+      rejectedCount: rejectedSet.size,
+    });
     throw new AutoDispatchError('no_driver', 'Aucun chauffeur disponible.');
   }
 
-  logger.info('[AUTO DISPATCH] candidates', {
+  logger.info('[DISPATCH V2] candidates', {
     rideId: params.rideId,
-    eligible: eligibleCandidates.length,
+    eligible: scoredCandidates.length,
     totalLive: candidates.length,
+    rejectedCount: rejectedSet.size,
   });
 
-  const sortedCandidates = [...eligibleCandidates].sort((left, right) => {
-    const distanceA = haversineDistanceMeters(rideCoords, {
-      latitude: left.latitude ?? DEFAULT_GUELMA.latitude,
-      longitude: left.longitude ?? DEFAULT_GUELMA.longitude,
-    });
-    const distanceB = haversineDistanceMeters(rideCoords, {
-      latitude: right.latitude ?? DEFAULT_GUELMA.latitude,
-      longitude: right.longitude ?? DEFAULT_GUELMA.longitude,
-    });
-
-    return distanceA - distanceB;
-  });
+  const sortedCandidates = [...scoredCandidates].sort((left, right) => left.score - right.score);
 
   let lastError: AutoDispatchError | null = null;
+  const retryableCodes = [
+    'driver_not_available',
+    'driver_not_approved',
+    'driver_suspended',
+    'driver_already_rejected',
+    'driver_stale_gps',
+  ];
 
-  for (const candidate of sortedCandidates) {
-    const driverId = resolveRegisteredDriverId(candidate, profileByDriverId);
-    if (!driverId) continue;
-
+  for (const entry of sortedCandidates) {
+    const { candidate, driverId, distanceM, score, gpsAgeMs } = entry;
     const driverName = candidate.driverName || candidate.name || 'Chauffeur PROTAXI';
-    const distanceM = haversineDistanceMeters(rideCoords, {
-      latitude: candidate.latitude ?? DEFAULT_GUELMA.latitude,
-      longitude: candidate.longitude ?? DEFAULT_GUELMA.longitude,
-    });
 
     try {
       await assignRideToDriverAdmin(params.db, {
@@ -330,15 +459,19 @@ async function autoDispatchNearestEligibleDriver(params: {
         driverCar: candidate.car || 'Renault Clio • Berline',
       });
 
-      return { driverId, driverName, distanceM };
+      logger.info('[DISPATCH V2] selected driver', {
+        rideId: params.rideId,
+        driverId,
+        driverName,
+        score: Math.round(score),
+        distanceM: Math.round(distanceM),
+        gpsAgeMs: Math.round(gpsAgeMs),
+      });
+
+      return { driverId, driverName, distanceM, score, gpsAgeMs };
     } catch (error) {
-      if (
-        error instanceof AutoDispatchError
-        && ['driver_not_available', 'driver_not_approved', 'driver_suspended', 'driver_already_rejected'].includes(
-          error.code,
-        )
-      ) {
-        logger.info('[AUTO DISPATCH] candidate skipped', {
+      if (error instanceof AutoDispatchError && retryableCodes.includes(error.code)) {
+        logger.info('[DISPATCH V2] candidate skipped', {
           rideId: params.rideId,
           driverId,
           code: error.code,
@@ -363,50 +496,44 @@ export async function attemptAutoDispatchForRide(
   const rideMode = String(ride.rideMode || '').trim();
 
   if (status !== 'En attente') {
-    logger.info('[AUTO DISPATCH] skip — status not En attente', { rideId, status });
+    logger.info('[DISPATCH V2] skip — status not En attente', { rideId, status });
     return;
   }
 
   if (rideMode !== 'Maintenant') {
-    logger.info('[AUTO DISPATCH] skip — rideMode not Maintenant', { rideId, rideMode });
+    logger.info('[DISPATCH V2] skip — rideMode not Maintenant', { rideId, rideMode });
     return;
   }
 
   if (hasAssignedDriverId(ride.driverId)) {
-    logger.info('[AUTO DISPATCH] skip — driver already assigned', { rideId });
+    logger.info('[DISPATCH V2] skip — driver already assigned', { rideId });
     return;
   }
 
   const rideCoords = getRideCoordinates(ride);
-  logger.info('[AUTO DISPATCH] start', {
+  logger.info('[DISPATCH V2] start', {
     rideId,
     latitude: rideCoords.latitude,
     longitude: rideCoords.longitude,
+    gpsStaleMs: GPS_STALE_MS,
   });
 
   try {
-    const result = await autoDispatchNearestEligibleDriver({ db, rideId, ride });
-
-    logger.info('[AUTO DISPATCH] assigned', {
-      rideId,
-      driverId: result.driverId,
-      driverName: result.driverName,
-      distanceM: Math.round(result.distanceM),
-    });
+    await autoDispatchNearestEligibleDriver({ db, rideId, ride });
   } catch (error) {
     if (error instanceof AutoDispatchError) {
       if (error.code === 'no_driver') {
-        logger.info('[AUTO DISPATCH] no driver — ride stays En attente', { rideId });
+        logger.info('[DISPATCH V2] no driver — ride stays En attente', { rideId });
         return;
       }
 
       if (error.code === 'ride_already_assigned') {
-        logger.info('[AUTO DISPATCH] already assigned — skip', { rideId });
+        logger.info('[DISPATCH V2] already assigned — skip', { rideId });
         return;
       }
 
       if (error.code === 'driver_not_available') {
-        logger.info('[AUTO DISPATCH] driver not available — ride stays En attente', {
+        logger.info('[DISPATCH V2] driver not available — ride stays En attente', {
           rideId,
           code: error.code,
         });
@@ -414,7 +541,7 @@ export async function attemptAutoDispatchForRide(
       }
     }
 
-    logger.error('[AUTO DISPATCH] failed', { rideId, error });
+    logger.error('[DISPATCH V2] failed', { rideId, error });
   }
 }
 
@@ -428,7 +555,7 @@ export const onRideCreatedAutoDispatch = onDocumentCreated(
     const ride = event.data?.data() as Record<string, unknown> | undefined;
 
     if (!ride) {
-      logger.info('[AUTO DISPATCH] skip — missing ride data', { rideId });
+      logger.info('[DISPATCH V2] skip — missing ride data', { rideId });
       return;
     }
 

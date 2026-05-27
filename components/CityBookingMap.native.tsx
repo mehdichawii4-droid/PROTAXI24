@@ -4,6 +4,7 @@ import { View } from 'react-native';
 
 import MapViewDirections from './CourseMapDirections.native';
 import { CityBookingMapProps, MapRegion } from './CityBookingMap.types';
+import LiveDriverMapMarker from './LiveDriverMapMarker';
 import { MapView, Marker } from './NativeMapView.native';
 
 const GOOGLE_MAPS_API_KEY = 'AIzaSyDYdlqeE8VAWNC8zry90jywNt5ia7vte9E';
@@ -33,6 +34,7 @@ export default function CityBookingMap({
   routePreview = null,
   onRouteMetrics,
   mapRef,
+  liveMapDrivers = [],
 }: CityBookingMapProps) {
   const internalMapRef = useRef<any>(null);
   const regionRef = useRef(region);
@@ -110,6 +112,26 @@ export default function CityBookingMap({
           : undefined
       }
     >
+      {!selectionMode
+        ? liveMapDrivers.map((driver) => (
+            <Marker
+              key={driver.id}
+              coordinate={{
+                latitude: driver.latitude,
+                longitude: driver.longitude,
+              }}
+              title={driver.driverName}
+              description={
+                typeof driver.etaMin === 'number' ? `${driver.etaMin} min` : undefined
+              }
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+            >
+              <LiveDriverMapMarker rotation={driver.heading} />
+            </Marker>
+          ))
+        : null}
+
       {!selectionMode ? (
         <Marker coordinate={clientCoordinate} title={markerTitle}>
           <View

@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
   arrayUnion,
@@ -38,12 +38,12 @@ import { useAuthLogout } from '@/hooks/useAuthLogout';
 import { useAuth } from '@/hooks/useAuth';
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import {
-  configureNotificationHandler,
   getRideWaitMinutes,
   mapRideNotificationContext,
   notifyDriver,
   requestNotificationPermissions,
 } from '@/services/notificationService';
+import { consumePendingPushRideId } from '@/services/pushNotificationRouting';
 import {
   buildMapCoordinate,
   haversineDistanceMeters,
@@ -62,18 +62,51 @@ import {
   getDriverLiveStateAfterRideTransition,
 } from '@/types/driver';
 
-configureNotificationHandler();
-
 const gold = '#FFD700';
 const bg = '#050505';
 const card = '#0E0E0E';
 const border = '#262626';
 const CLIENT_WAITING_MS = 90000;
-const GPS_UPDATE_INTERVAL_MS = 8000;
-const GPS_WATCH_TIME_INTERVAL_MS = 5000;
-const GPS_WATCH_DISTANCE_METERS = 10;
-const GPS_MIN_WRITE_DISTANCE_METERS = 10;
 const PICKUP_ARRIVAL_RADIUS_M = 50;
+
+type GpsTrackingMode = 'idle' | 'busy';
+
+type GpsTrackingProfile = {
+  mode: GpsTrackingMode;
+  logTag: string;
+  updateIntervalMs: number;
+  watchTimeIntervalMs: number;
+  watchDistanceMeters: number;
+  minWriteDistanceMeters: number;
+  watchAccuracy: Location.LocationAccuracy;
+  initialAccuracy: Location.LocationAccuracy;
+};
+
+const GPS_BUSY_PROFILE: GpsTrackingProfile = {
+  mode: 'busy',
+  logTag: '[LIVE GPS][busy]',
+  updateIntervalMs: 8000,
+  watchTimeIntervalMs: 5000,
+  watchDistanceMeters: 10,
+  minWriteDistanceMeters: 10,
+  watchAccuracy: Location.Accuracy.High,
+  initialAccuracy: Location.Accuracy.High,
+};
+
+const GPS_IDLE_PROFILE: GpsTrackingProfile = {
+  mode: 'idle',
+  logTag: '[LIVE GPS][idle]',
+  updateIntervalMs: 28000,
+  watchTimeIntervalMs: 28000,
+  watchDistanceMeters: 50,
+  minWriteDistanceMeters: 50,
+  watchAccuracy: Location.Accuracy.Balanced,
+  initialAccuracy: Location.Accuracy.Balanced,
+};
+
+function getGpsTrackingProfile(isBusy: boolean): GpsTrackingProfile {
+  return isBusy ? GPS_BUSY_PROFILE : GPS_IDLE_PROFILE;
+}
 
 function showDriverToast(message: string) {
   if (Platform.OS === 'android') {
@@ -293,6 +326,7 @@ function useLiveEta(status: string, ride: any) {
 }
 
 export default function DriversDashboardScreen() {
+  const { rideId: pushRideIdParam } = useLocalSearchParams<{ rideId?: string }>();
   const { confirmLogout } = useAuthLogout();
   const { user, profile } = useAuth();
   const driverUid = user?.uid ?? getFirebaseAuth().currentUser?.uid ?? '';
@@ -300,6 +334,7 @@ export default function DriversDashboardScreen() {
   const driverPhone = profile?.phone?.trim() || '';
   const [driverRating, setDriverRating] = useState(5);
   const [filter, setFilter] = useState('Toutes');
+  const [highlightRideId, setHighlightRideId] = useState<string | null>(null);
   const [rides, setRides] = useState<any[]>([]);
   const [isOnline, setIsOnline] = useState(true);
 
@@ -342,6 +377,16 @@ export default function DriversDashboardScreen() {
     void requestNotificationPermissions();
   }, []);
 
+  useEffect(() => {
+    const fromParam = String(pushRideIdParam ?? '').trim();
+    const fromPush = consumePendingPushRideId();
+    const rideId = fromParam || fromPush;
+    if (!rideId) return;
+
+    setHighlightRideId(rideId);
+    setFilter('Attribuée');
+    devLog('[PUSH] dashboard focus ride', { rideId });
+  }, [pushRideIdParam]);
 
   useEffect(() => {
     if (!driverUid) {
@@ -390,9 +435,15 @@ export default function DriversDashboardScreen() {
   }, [rides]);
 
   const isDriverBusy = useMemo(() => computeIsBusyFromRides(rides), [rides]);
+  const isDriverBusyRef = useRef(isDriverBusy);
+  const prevGpsBusyRef = useRef(isDriverBusy);
+
+  useEffect(() => {
+    isDriverBusyRef.current = isDriverBusy;
+  }, [isDriverBusy]);
 
   const shouldTrackGps =
-    Platform.OS !== 'web' && isOnline && isDriverBusy && appIsActive;
+    Platform.OS !== 'web' && !!driverUid && isOnline && appIsActive;
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -446,11 +497,12 @@ export default function DriversDashboardScreen() {
     },
     options?: { force?: boolean }
   ) => {
+    const profile = getGpsTrackingProfile(isDriverBusyRef.current);
     const now = Date.now();
 
     if (
       !options?.force &&
-      now - lastGpsSyncRef.current < GPS_UPDATE_INTERVAL_MS
+      now - lastGpsSyncRef.current < profile.updateIntervalMs
     ) {
       latestGpsPositionRef.current = position;
 
@@ -461,7 +513,7 @@ export default function DriversDashboardScreen() {
           if (latest) {
             void syncDriverLivePosition(latest, { force: true });
           }
-        }, GPS_UPDATE_INTERVAL_MS - (now - lastGpsSyncRef.current));
+        }, profile.updateIntervalMs - (now - lastGpsSyncRef.current));
       }
 
       return;
@@ -474,8 +526,8 @@ export default function DriversDashboardScreen() {
 
     if (!options?.force && lastWrittenGpsRef.current) {
       const movedMeters = haversineDistanceMeters(lastWrittenGpsRef.current, position);
-      if (movedMeters < GPS_MIN_WRITE_DISTANCE_METERS) {
-        devLog('[LIVE GPS] skip write — movement below threshold', {
+      if (movedMeters < profile.minWriteDistanceMeters) {
+        devLog(`${profile.logTag} skip write — movement below threshold`, {
           driverUid,
           movedMeters: Math.round(movedMeters),
         });
@@ -488,7 +540,7 @@ export default function DriversDashboardScreen() {
       ridesRef.current,
     );
 
-    devLog('[LIVE GPS] write driversLive', {
+    devLog(`${profile.logTag} write driversLive`, {
       driverUid,
       latitude: position.latitude,
       longitude: position.longitude,
@@ -582,12 +634,12 @@ export default function DriversDashboardScreen() {
         if (prevStatus === status) return;
 
         if (status === 'Attribuée') {
+          // Remote push (onRideUpdatedPush) is the single notification channel for new assignments.
+          // Vibration only here avoids duplicate banner/sound with foreground Expo push.
           Vibration.vibrate(500);
-          void notifyDriver(notifiedRef.current, 'new_ride', rideContext);
-
-          if (getRideWaitMinutes(ride) > 5) {
-            void notifyDriver(notifiedRef.current, 'urgent_ride', rideContext);
-          }
+          devLog('[PUSH] assignment detected — local notify skipped (remote push)', {
+            rideId: ride.id,
+          });
 
           if (waitingTimersRef.current[ride.id]) {
             clearTimeout(waitingTimersRef.current[ride.id]);
@@ -682,13 +734,28 @@ export default function DriversDashboardScreen() {
 
   useEffect(() => {
     if (!shouldTrackGps) {
+      prevGpsBusyRef.current = isDriverBusy;
       stopGpsTracking();
       return;
+    }
+
+    const modeChanged = prevGpsBusyRef.current !== isDriverBusy;
+    prevGpsBusyRef.current = isDriverBusy;
+
+    if (modeChanged) {
+      const profile = getGpsTrackingProfile(isDriverBusy);
+      devLog(`${profile.logTag} mode transition — restarting watch`, {
+        driverUid,
+        from: isDriverBusy ? 'idle' : 'busy',
+        to: profile.mode,
+      });
     }
 
     let cancelled = false;
 
     const startGpsTracking = async () => {
+      const profile = getGpsTrackingProfile(isDriverBusyRef.current);
+
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
 
@@ -704,8 +771,13 @@ export default function DriversDashboardScreen() {
 
         if (locationSubscriptionRef.current) return;
 
+        devLog(`${profile.logTag} tracking started`, {
+          driverUid,
+          mode: profile.mode,
+        });
+
         const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
+          accuracy: profile.initialAccuracy,
         });
 
         if (cancelled) return;
@@ -735,9 +807,9 @@ export default function DriversDashboardScreen() {
 
         locationSubscriptionRef.current = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.High,
-            timeInterval: GPS_WATCH_TIME_INTERVAL_MS,
-            distanceInterval: GPS_WATCH_DISTANCE_METERS,
+            accuracy: profile.watchAccuracy,
+            timeInterval: profile.watchTimeIntervalMs,
+            distanceInterval: profile.watchDistanceMeters,
           },
           (nextLocation) => {
             const newPosition = {
@@ -765,7 +837,7 @@ export default function DriversDashboardScreen() {
           }
         );
       } catch (error) {
-        devError('[LIVE GPS] tracking unavailable', error);
+        devError(`${profile.logTag} tracking unavailable`, error);
       }
     };
 
@@ -1465,7 +1537,13 @@ export default function DriversDashboardScreen() {
           </View>
         ) : (
           filteredRides.map((ride) => (
-            <View key={ride.id} style={styles.rideCard}>
+            <View
+              key={ride.id}
+              style={[
+                styles.rideCard,
+                highlightRideId === ride.id && styles.rideCardHighlight,
+              ]}
+            >
               <View style={styles.rideTop}>
                 <View>
                   <Text style={styles.ridePrice}>{ride.price || 'Prix à confirmer'}</Text>
@@ -2742,6 +2820,10 @@ const styles = StyleSheet.create({
     borderColor: border,
     padding: 18,
     marginBottom: 16,
+  },
+  rideCardHighlight: {
+    borderColor: gold,
+    borderWidth: 2,
   },
   rideTop: {
     flexDirection: 'row',

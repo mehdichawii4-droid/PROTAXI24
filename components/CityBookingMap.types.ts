@@ -21,6 +21,15 @@ export type RouteMetrics = {
   etaMin: number;
 };
 
+export type CityLiveMapDriver = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  heading?: number | null;
+  driverName?: string;
+  etaMin?: number;
+};
+
 export type CityBookingMapProps = {
   mapStyle: ViewStyle;
   region: MapRegion;
@@ -32,4 +41,5 @@ export type CityBookingMapProps = {
   routePreview?: RoutePreview | null;
   onRouteMetrics?: (metrics: RouteMetrics) => void;
   mapRef?: RefObject<{ fitRoute: () => void } | null>;
+  liveMapDrivers?: CityLiveMapDriver[];
 };

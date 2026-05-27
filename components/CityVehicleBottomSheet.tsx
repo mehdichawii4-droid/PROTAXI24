@@ -32,7 +32,7 @@ import {
   type CityVehicleDef,
   type CityVehicleId,
 } from '@/constants/cityVehicles';
-import { useCityLiveDrivers, type CityLiveDriverCard } from '@/hooks/useCityLiveDrivers';
+import type { CityLiveDriverCard } from '@/hooks/useCityLiveDrivers';
 
 export {
   CITY_VEHICLES,
@@ -134,6 +134,10 @@ type Props = {
   sheetHeightShared?: SharedValue<number>;
   sheetProgressShared?: SharedValue<number>;
   onHeightChange?: (height: number) => void;
+  liveCards: CityLiveDriverCard[];
+  fallbackVehicleIds: CityVehicleDef[];
+  liveDriversLoading: boolean;
+  hasLiveDrivers: boolean;
 };
 
 function VehicleCarArt({
@@ -296,6 +300,10 @@ export default function CityVehicleBottomSheet({
   sheetHeightShared,
   sheetProgressShared,
   onHeightChange,
+  liveCards,
+  fallbackVehicleIds,
+  liveDriversLoading,
+  hasLiveDrivers,
 }: Props) {
   const bottomSheetRef = useRef<BottomSheet>(null);
   const animatedPosition = useSharedValue(SCREEN_HEIGHT - SHEET_SNAP.collapsed);
@@ -304,10 +312,7 @@ export default function CityVehicleBottomSheet({
   const bottomBlockHeight = useSharedValue(BOTTOM_BLOCK_PX + footerPad);
   const heroRowHeight = useSharedValue(HERO_ROW_PX);
 
-  const { liveCards, fallbackVehicleIds, loading, hasLiveDrivers } = useCityLiveDrivers({
-    visible,
-    baseEtaMin,
-  });
+  const loading = liveDriversLoading;
 
   const snapPoints = useMemo(
     () => [SHEET_SNAP.collapsed, SHEET_SNAP.mid, SHEET_SNAP.expanded],

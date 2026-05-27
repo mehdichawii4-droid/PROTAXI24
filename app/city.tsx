@@ -41,6 +41,7 @@ import ScheduleRideModal, {
 } from '@/components/ScheduleRideModal';
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
+import { useCityLiveDrivers } from '@/hooks/useCityLiveDrivers';
 import { submitCityRide } from '@/services/cityRideService';
 import { reverseGeocodeCoordinate } from '@/utils/cityMapGeocode';
 import { isValidMapCoordinate } from '@/utils/rideTracking';
@@ -194,6 +195,18 @@ export default function CityScreen() {
   const selectionBottomInset = Math.max(insets.bottom, 12);
   const showVehicleStep =
     timingConfirmed && (timingMode === 'now' || Boolean(scheduledAt));
+  const liveDriversEnabled = showVehicleStep && !mapSelectionMode;
+
+  const {
+    liveCards,
+    liveMapDrivers,
+    fallbackVehicleIds,
+    loading: liveDriversLoading,
+    hasLiveDrivers,
+  } = useCityLiveDrivers({
+    visible: liveDriversEnabled,
+    baseEtaMin,
+  });
 
   useEffect(() => {
     mapParallaxEnabled.value = showVehicleStep && !mapSelectionMode ? 1 : 0;
@@ -533,6 +546,7 @@ export default function CityScreen() {
             onSelectionRegionChange={handleSelectionRegionChange}
             routePreview={mapSelectionMode ? null : routePreview}
             onRouteMetrics={setRouteMetrics}
+            liveMapDrivers={liveDriversEnabled ? liveMapDrivers : []}
           />
         </Animated.View>
 
@@ -645,6 +659,10 @@ export default function CityScreen() {
             selectedVehicle={vehicleType}
             onSelectVehicle={setVehicleType}
             baseEtaMin={baseEtaMin}
+            liveCards={liveCards}
+            fallbackVehicleIds={fallbackVehicleIds}
+            liveDriversLoading={liveDriversLoading}
+            hasLiveDrivers={hasLiveDrivers}
             vehiclePrices={vehiclePrices}
             passengersLabel={`${passengers} passager${passengers > 1 ? 's' : ''}`}
             paymentLabel="A bord (Espèces/CB)"

@@ -90,7 +90,7 @@ export async function getCurrentExpoPushToken(): Promise<string | null> {
 
   const granted = await requestPushNotificationPermissions();
   if (!granted) {
-    devWarn('[PUSH TOKEN] permission not granted');
+    devWarn('[PUSH] token missing — permission not granted');
     return null;
   }
 
@@ -104,14 +104,14 @@ export async function getCurrentExpoPushToken(): Promise<string | null> {
 
   try {
     const tokenResult = await Notifications.getExpoPushTokenAsync({ projectId });
-    devLog('[PUSH TOKEN]', {
-      token: tokenResult.data,
+    devLog('[PUSH] token found', {
+      pushTokenPreview: `${tokenResult.data.slice(0, 24)}…`,
       projectId,
       platform: Platform.OS,
     });
     return tokenResult.data;
   } catch (error) {
-    devError('[PUSH TOKEN] getExpoPushTokenAsync failed', error);
+    devError('[PUSH] token missing — getExpoPushTokenAsync failed', error);
     return null;
   }
 }
@@ -166,9 +166,11 @@ export async function registerForPushNotificationsAsync(
 
   const token = await getCurrentExpoPushToken();
   if (!token) {
+    devWarn('[PUSH] token missing — register aborted', { uid, role });
     return null;
   }
 
   await saveUserPushToken(uid, role, token, 'registerForPushNotificationsAsync');
+  devLog('[PUSH] token registered', { uid, role });
   return token;
 }
