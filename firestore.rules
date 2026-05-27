@@ -175,6 +175,7 @@ service cloud.firestore {
         'driverPlate',
         'driverPhoto',
         'acceptedAt',
+        'startedAt',
         'finishedAt',
         'updatedAt',
         'rejectedDriverIds',

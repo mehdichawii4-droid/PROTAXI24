@@ -13,7 +13,7 @@ import {
   updateDoc,
   where,
 } from 'firebase/firestore';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -44,7 +44,11 @@ import {
   notifyDriver,
   requestNotificationPermissions,
 } from '@/services/notificationService';
-import { haversineDistanceMeters } from '@/utils/rideTracking';
+import {
+  buildMapCoordinate,
+  haversineDistanceMeters,
+  isValidMapCoordinate,
+} from '@/utils/rideTracking';
 import { db } from '../firebaseConfig';
 import { devError, devLog } from '@/utils/devLog';
 import {
@@ -69,6 +73,7 @@ const GPS_UPDATE_INTERVAL_MS = 8000;
 const GPS_WATCH_TIME_INTERVAL_MS = 5000;
 const GPS_WATCH_DISTANCE_METERS = 10;
 const GPS_MIN_WRITE_DISTANCE_METERS = 10;
+const PICKUP_ARRIVAL_RADIUS_M = 50;
 
 function showDriverToast(message: string) {
   if (Platform.OS === 'android') {
@@ -322,6 +327,11 @@ export default function DriversDashboardScreen() {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const autoArriveHandledRef = useRef<Set<string>>(new Set());
+  const autoArriveInFlightRef = useRef<string | null>(null);
+  const tryAutoMarkArrivedRef = useRef<
+    ((position: { latitude: number; longitude: number }) => void) | null
+  >(null);
   const assignedRidesRef = useRef<any[]>([]);
   const unassignedRidesRef = useRef<any[]>([]);
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
@@ -712,6 +722,8 @@ export default function DriversDashboardScreen() {
           longitude: currentPosition.longitude,
         });
 
+        void tryAutoMarkArrivedRef.current?.(currentPosition);
+
         await syncDriverLivePosition(currentPosition, { force: true });
 
         mapRef.current?.animateToRegion({
@@ -739,6 +751,8 @@ export default function DriversDashboardScreen() {
               latitude: newPosition.latitude,
               longitude: newPosition.longitude,
             });
+
+            void tryAutoMarkArrivedRef.current?.(newPosition);
 
             void syncDriverLivePosition(newPosition);
 
@@ -1033,8 +1047,9 @@ export default function DriversDashboardScreen() {
       } else {
         await updateDoc(doc(db, 'rides', rideId), {
           status: finalStatus,
-          ...(finalStatus === 'Terminée' ? { finishedAt: new Date() } : {}),
-          updatedAt: new Date(),
+          updatedAt: serverTimestamp(),
+          ...(finalStatus === 'En route' ? { startedAt: serverTimestamp() } : {}),
+          ...(finalStatus === 'Terminée' ? { finishedAt: serverTimestamp() } : {}),
         });
 
         const liveState = getDriverLiveStateAfterRideTransition(
@@ -1060,6 +1075,15 @@ export default function DriversDashboardScreen() {
           },
           { merge: true },
         );
+
+        if (finalStatus === 'En route') {
+          ridesRef.current = ridesRef.current.map((ride) =>
+            ride.id === rideId ? { ...ride, status: 'En route' } : ride,
+          );
+
+          const position = latestGpsPositionRef.current ?? driverLocation;
+          void tryAutoMarkArrivedRef.current?.(position);
+        }
       }
 
     } catch (error) {
@@ -1067,6 +1091,118 @@ export default function DriversDashboardScreen() {
       Alert.alert('Erreur', 'Impossible de mettre à jour le statut de la course.');
     }
   };
+
+  const tryAutoMarkArrived = useCallback(async (position: {
+    latitude: number;
+    longitude: number;
+  }) => {
+    const logAutoArrive = (reason: string, extra?: Record<string, unknown>) => {
+      console.log('[AUTO ARRIVE DEBUG]', reason, extra ?? {});
+    };
+
+    logAutoArrive('tick', {
+      driverUid,
+      driverPosition: position,
+      inFlightRideId: autoArriveInFlightRef.current,
+    });
+
+    if (!driverUid) {
+      logAutoArrive('return: missing driverUid');
+      return;
+    }
+    if (autoArriveInFlightRef.current) {
+      logAutoArrive('return: auto-arrive already in flight', {
+        rideId: autoArriveInFlightRef.current,
+      });
+      return;
+    }
+
+    const enRouteRide = ridesRef.current.find(
+      (ride) =>
+        ride?.id &&
+        normalizeStatus(ride.status) === 'En route' &&
+        String(ride.driverId || '').trim() === driverUid,
+    );
+
+    if (!enRouteRide?.id) {
+      logAutoArrive('return: no En route ride for driver', {
+        rides: ridesRef.current.map((ride) => ({
+          id: ride?.id,
+          status: normalizeStatus(ride?.status),
+          driverId: String(ride?.driverId || ''),
+        })),
+      });
+      return;
+    }
+
+    const rideId = String(enRouteRide.id);
+    const rideStatus = normalizeStatus(enRouteRide.status);
+
+    if (autoArriveHandledRef.current.has(rideId)) {
+      logAutoArrive('return: ride already handled', { rideId, rideStatus });
+      return;
+    }
+
+    const pickup = buildMapCoordinate(
+      enRouteRide.clientLatitude ?? enRouteRide.latitude,
+      enRouteRide.clientLongitude ?? enRouteRide.longitude,
+    );
+    const pickupValid = isValidMapCoordinate(pickup);
+
+    logAutoArrive('pickup check', {
+      rideId,
+      rideStatus,
+      clientLatitude: enRouteRide.clientLatitude ?? null,
+      clientLongitude: enRouteRide.clientLongitude ?? null,
+      latitude: enRouteRide.latitude ?? null,
+      longitude: enRouteRide.longitude ?? null,
+      pickup,
+      pickupValid,
+    });
+
+    if (!pickupValid) {
+      logAutoArrive('return: invalid pickup coordinates', { rideId, pickup });
+      return;
+    }
+
+    const distanceM = haversineDistanceMeters(position, pickup);
+
+    logAutoArrive('distance check', {
+      rideId,
+      distanceM: Math.round(distanceM),
+      thresholdM: PICKUP_ARRIVAL_RADIUS_M,
+    });
+
+    if (distanceM > PICKUP_ARRIVAL_RADIUS_M) {
+      logAutoArrive('return: distance above threshold', {
+        rideId,
+        distanceM: Math.round(distanceM),
+        thresholdM: PICKUP_ARRIVAL_RADIUS_M,
+      });
+      return;
+    }
+
+    autoArriveHandledRef.current.add(rideId);
+    autoArriveInFlightRef.current = rideId;
+
+    logAutoArrive('trigger updateRideStatus Arrivé', { rideId, distanceM: Math.round(distanceM) });
+
+    try {
+      await updateRideStatus(rideId, 'Arrivé');
+      showDriverToast('Arrivée détectée automatiquement');
+      logAutoArrive('success', { rideId });
+    } finally {
+      if (autoArriveInFlightRef.current === rideId) {
+        autoArriveInFlightRef.current = null;
+      }
+    }
+  }, [driverUid, updateRideStatus]);
+
+  useEffect(() => {
+    tryAutoMarkArrivedRef.current = (position) => {
+      void tryAutoMarkArrived(position);
+    };
+  }, [tryAutoMarkArrived]);
 
   const renderRideActions = (ride: any) => {
     const status = normalizeStatus(ride.status);

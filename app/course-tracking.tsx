@@ -91,6 +91,15 @@ function getHeaderStatusShort(status: string, displayStatus: string): string {
   return displayStatus.length > 22 ? `${displayStatus.slice(0, 22)}…` : displayStatus;
 }
 
+function getStatusAccentColor(label: string): string {
+  if (label === 'En attente' || label === 'Recherche chauffeur') return gold;
+  if (label === 'Chauffeur trouvé' || label === 'Attribuée') return blue;
+  if (label === 'Le chauffeur arrive' || label === 'Acceptée') return green;
+  if (label === 'Chauffeur proche') return green;
+  if (label === 'En route') return green;
+  return gold;
+}
+
 function PremiumActionButton({
   label,
   icon,
@@ -165,8 +174,10 @@ export default function CourseTrackingScreen() {
   });
 const [carRotation, setCarRotation] = useState(0);
   const [status, setStatus] = useState(
-    normalizeRideTrackingStatus(params.status || 'Chauffeur en route')
+    normalizeRideTrackingStatus(params.status || 'En attente')
   );
+  const [uiStatusLabel, setUiStatusLabel] = useState('En attente');
+  const [simulatedEtaMin, setSimulatedEtaMin] = useState(8);
   const [rejectedDriverIds, setRejectedDriverIds] = useState<string[]>([]);
   const [rideData, setRideData] = useState<Record<string, unknown> | null>(null);
 const [demoMode, setDemoMode] = useState(false);
@@ -182,7 +193,9 @@ const arrivedAlertShown = useRef(false);
 const finishedAlertShown = useRef(false);
 const nearAlertShown = useRef(false);
 const notifiedRef = useRef<Set<string>>(new Set());
-const statusRef = useRef(normalizeRideTrackingStatus(params.status || 'Chauffeur en route'));
+const statusRef = useRef(normalizeRideTrackingStatus(params.status || 'En attente'));
+const simulationActiveRef = useRef(true);
+const simulationTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 const locationSubscriptionRef =
   useRef<Location.LocationSubscription | null>(null);
 const driverPositionRef = useRef(driverPosition);
@@ -190,6 +203,9 @@ const clientPositionRef = useRef(clientPosition);
 const lastRealGpsAtRef = useRef(0);
   const panelOpacity = useRef(new Animated.Value(0)).current;
   const panelTranslateY = useRef(new Animated.Value(28)).current;
+  const statusTextOpacity = useRef(new Animated.Value(1)).current;
+  const statusTextScale = useRef(new Animated.Value(1)).current;
+  const statusIconScale = useRef(new Animated.Value(1)).current;
 
   const destinationPosition = useMemo(
     () =>
@@ -215,7 +231,62 @@ const lastRealGpsAtRef = useRef(0);
   const headerStatusShort = getHeaderStatusShort(status, displayStatus);
   const compactGpsBadge = getCompactGpsBadgeLabel(driverGpsBadge);
   const etaMinutes = Math.max(1, Math.ceil(durationMin));
+  const isUiSimulationActive =
+    simulationActiveRef.current &&
+    status === 'En attente' &&
+    !driverId &&
+    displayStatus === 'En attente';
+  const effectiveStatusLabel = isUiSimulationActive ? uiStatusLabel : headerStatusShort;
+  const effectiveEtaMinutes = isUiSimulationActive ? simulatedEtaMin : etaMinutes;
+  const statusAccentColor = getStatusAccentColor(effectiveStatusLabel);
+  const prevStatusLabelRef = useRef(effectiveStatusLabel);
   const panelBottomInset = Math.max(insets.bottom, 6) + 4;
+
+  useEffect(() => {
+    if (prevStatusLabelRef.current === effectiveStatusLabel) return;
+    prevStatusLabelRef.current = effectiveStatusLabel;
+
+    statusTextOpacity.setValue(0.72);
+    statusTextScale.setValue(0.96);
+    statusIconScale.setValue(1);
+
+    Animated.parallel([
+      Animated.timing(statusTextOpacity, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.spring(statusTextScale, {
+        toValue: 1,
+        friction: 7,
+        tension: 180,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(statusIconScale, {
+          toValue: 1.12,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(statusIconScale, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [effectiveStatusLabel, statusIconScale, statusTextOpacity, statusTextScale]);
+
+  const clearSimulationTimers = () => {
+    simulationTimersRef.current.forEach(clearTimeout);
+    simulationTimersRef.current = [];
+  };
+
+  const stopStatusSimulation = () => {
+    if (!simulationActiveRef.current) return;
+    simulationActiveRef.current = false;
+    clearSimulationTimers();
+  };
 
   const removeLocationSubscription = () => {
     const subscription = locationSubscriptionRef.current;
@@ -224,6 +295,42 @@ const lastRealGpsAtRef = useRef(0);
     }
     locationSubscriptionRef.current = null;
   };
+
+  useEffect(() => {
+    if (!hasValidRide) return;
+
+    simulationActiveRef.current = true;
+    setUiStatusLabel('En attente');
+    setSimulatedEtaMin(8);
+    clearSimulationTimers();
+
+    const schedule = (delay: number, fn: () => void) => {
+      const timerId = setTimeout(fn, delay);
+      simulationTimersRef.current.push(timerId);
+    };
+
+    schedule(4000, () => {
+      if (!simulationActiveRef.current) return;
+      setUiStatusLabel('Chauffeur trouvé');
+      setSimulatedEtaMin(6);
+    });
+
+    schedule(6000, () => {
+      if (!simulationActiveRef.current) return;
+      setUiStatusLabel('Le chauffeur arrive');
+      setSimulatedEtaMin(4);
+    });
+
+    schedule(8000, () => {
+      if (!simulationActiveRef.current) return;
+      setUiStatusLabel('Chauffeur proche');
+      setSimulatedEtaMin(2);
+    });
+
+    return () => {
+      stopStatusSimulation();
+    };
+  }, [hasValidRide, rideId]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -390,6 +497,10 @@ useEffect(() => {
 
         const nextStatus = normalizeRideTrackingStatus(data.status);
         if (!nextStatus) return;
+
+        if (rideDriverId || nextStatus !== 'En attente') {
+          stopStatusSimulation();
+        }
 
         const previousStatus = statusRef.current;
         statusRef.current = nextStatus;
@@ -826,9 +937,16 @@ const openNavigationToClient = () => {
             <Text style={styles.headerLogo} numberOfLines={1}>
               <Text style={{ color: gold }}>PRO</Text>TAXI24
             </Text>
-            <Text style={styles.headerStatus} numberOfLines={1}>
-              {headerStatusShort}
-            </Text>
+            <Animated.View
+              style={{
+                opacity: statusTextOpacity,
+                transform: [{ scale: statusTextScale }],
+              }}
+            >
+              <Text style={[styles.headerStatus, { color: statusAccentColor }]} numberOfLines={1}>
+                {effectiveStatusLabel}
+              </Text>
+            </Animated.View>
           </View>
 
           <TouchableOpacity
@@ -886,8 +1004,8 @@ const openNavigationToClient = () => {
         <View style={styles.panelContent}>
           <View style={styles.metricsRow}>
             <View style={styles.metricItem}>
-              <Ionicons name="time-outline" size={13} color={gold} />
-              <Text style={styles.etaValue}>{etaMinutes}</Text>
+              <Ionicons name="time-outline" size={13} color={statusAccentColor} />
+              <Text style={[styles.etaValue, { color: statusAccentColor }]}>{effectiveEtaMinutes}</Text>
               <Text style={styles.metricLabel}>min</Text>
             </View>
             <View style={styles.metricsDivider} />
@@ -898,10 +1016,21 @@ const openNavigationToClient = () => {
             </View>
             <View style={styles.metricsDivider} />
             <View style={[styles.metricItem, { flex: 1 }]}>
-              <Ionicons name="pulse-outline" size={13} color={gold} />
-              <Text style={styles.metricValue} numberOfLines={1}>
-                {headerStatusShort}
-              </Text>
+              <Animated.View style={{ transform: [{ scale: statusIconScale }] }}>
+                <Ionicons name="pulse-outline" size={13} color={statusAccentColor} />
+              </Animated.View>
+              <Animated.View
+                style={{
+                  opacity: statusTextOpacity,
+                  transform: [{ scale: statusTextScale }],
+                  flex: 1,
+                  alignSelf: 'stretch',
+                }}
+              >
+                <Text style={[styles.metricValue, { color: statusAccentColor }]} numberOfLines={1}>
+                  {effectiveStatusLabel}
+                </Text>
+              </Animated.View>
               <Text style={styles.metricLabel}>statut</Text>
             </View>
           </View>
