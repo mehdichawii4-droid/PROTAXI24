@@ -64,8 +64,10 @@ import {
 import {
   canDriverRateClientFromRide,
   clientHasRatedDriverFromRide,
+  driverHasRatedClientFromRide,
   getClientDisplayRating,
   readLegacyClientStars,
+  resolveDriverHasRatedClient,
 } from '@/services/rideRating';
 import {
   getUnreadCountForRole,
@@ -369,6 +371,7 @@ export default function DriversDashboardScreen() {
   const [recentReviews, setRecentReviews] = useState<any[]>([]);
   const [driverRateRide, setDriverRateRide] = useState<any | null>(null);
   const [driverRateVisible, setDriverRateVisible] = useState(false);
+  const [driverRatedByRideId, setDriverRatedByRideId] = useState<Record<string, boolean>>({});
   const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
   const [localPaidRideIds, setLocalPaidRideIds] = useState<string[]>([]);
   const [revenueModalVisible, setRevenueModalVisible] = useState(false);
@@ -496,6 +499,92 @@ export default function DriversDashboardScreen() {
   useEffect(() => {
     ridesRef.current = rides;
   }, [rides]);
+
+  const driverRatingCheckRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!driverUid) return;
+
+    let cancelled = false;
+
+    rides.forEach((ride) => {
+      const rideId = String(ride?.id ?? '').trim();
+      const clientUid = String(ride?.clientUid ?? '').trim();
+      if (!rideId || !clientUid) return;
+      if (normalizeStatus(ride.status) !== 'Terminée') return;
+      if (String(ride.driverId ?? '').trim() !== driverUid) return;
+
+      if (driverHasRatedClientFromRide(ride)) {
+        setDriverRatedByRideId((prev) => (
+          prev[rideId] === true ? prev : { ...prev, [rideId]: true }
+        ));
+        driverRatingCheckRef.current.delete(rideId);
+        return;
+      }
+
+      if (driverRatingCheckRef.current.has(rideId)) return;
+
+      driverRatingCheckRef.current.add(rideId);
+      void resolveDriverHasRatedClient(rideId, driverUid, ride).then((rated) => {
+        if (cancelled) return;
+        setDriverRatedByRideId((prev) => ({ ...prev, [rideId]: rated }));
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rides, driverUid]);
+
+  const showRateClientButton = useCallback(
+    (ride: any) => {
+      const rideId = String(ride?.id ?? '').trim();
+      const clientUid = String(ride?.clientUid ?? '').trim();
+      if (!rideId || !clientUid || !driverUid) return false;
+      if (normalizeStatus(ride.status) !== 'Terminée') return false;
+      if (String(ride.driverId ?? '').trim() !== driverUid) return false;
+
+      if (driverRatedByRideId[rideId] === true) return false;
+      if (driverRatedByRideId[rideId] === false) return true;
+      return canDriverRateClientFromRide(ride);
+    },
+    [driverUid, driverRatedByRideId],
+  );
+
+  const openDriverRating = useCallback((ride: any) => {
+    setDriverRateRide(ride);
+    setDriverRateVisible(true);
+  }, []);
+
+  const patchRideAfterDriverRating = useCallback((rideId: string) => {
+    const patch = (ride: any) => {
+      if (String(ride?.id ?? '') !== rideId) return ride;
+      const priorStatus =
+        ride.ratingStatus && typeof ride.ratingStatus === 'object'
+          ? ride.ratingStatus
+          : {};
+      return {
+        ...ride,
+        ratingStatus: {
+          ...priorStatus,
+          driverRatedClient: true,
+        },
+      };
+    };
+
+    setRides((prev) => prev.map(patch));
+    ridesRef.current = ridesRef.current.map(patch);
+    setDriverRatedByRideId((prev) => ({ ...prev, [rideId]: true }));
+  }, []);
+
+  const handleDriverRatingSubmitted = useCallback(() => {
+    const rideId = String(driverRateRide?.id ?? '').trim();
+    if (rideId) {
+      patchRideAfterDriverRating(rideId);
+    }
+    setDriverRateVisible(false);
+    setDriverRateRide(null);
+  }, [driverRateRide, patchRideAfterDriverRating]);
 
   const isDriverBusy = useMemo(() => computeIsBusyFromRides(rides), [rides]);
   const isDriverBusyRef = useRef(isDriverBusy);
@@ -1620,6 +1709,8 @@ export default function DriversDashboardScreen() {
               });
               openRideChat(currentRide);
             }}
+            showRateClient={showRateClientButton(currentRide)}
+            onRateClient={() => openDriverRating(currentRide)}
           />
         ) : (
           <View style={styles.emptyBox}>
@@ -1799,6 +1890,28 @@ export default function DriversDashboardScreen() {
                 <MiniInfo icon="people-outline" label="Passagers" value={String(ride.passengers || '—')} />
               </View>
 
+              {normalizeStatus(ride.status) === 'Terminée'
+              && String(ride.driverId ?? '').trim() === driverUid ? (
+                <View style={styles.rateClientRow}>
+                  {showRateClientButton(ride) ? (
+                    <TouchableOpacity
+                      style={styles.rateClientBtn}
+                      onPress={() => openDriverRating(ride)}
+                      activeOpacity={0.9}
+                    >
+                      <Ionicons name="star-outline" size={18} color="#111" />
+                      <Text style={styles.rateClientBtnText}>Noter le client</Text>
+                    </TouchableOpacity>
+                  ) : getClientDisplayRating(ride) != null ? (
+                    <Text style={styles.rateClientDoneText}>
+                      Note client : {getClientDisplayRating(ride)} ⭐
+                    </Text>
+                  ) : driverRatedByRideId[ride.id] === true ? (
+                    <Text style={styles.rateClientDoneText}>Client noté ✅</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
               <View style={styles.actionsRow}>{renderRideActions(ride)}</View>
             </View>
             );
@@ -1841,16 +1954,11 @@ export default function DriversDashboardScreen() {
           visible={driverRateVisible}
           onClose={() => {
             setDriverRateVisible(false);
-            setDriverRateRide(null);
           }}
           onLater={() => {
             setDriverRateVisible(false);
-            setDriverRateRide(null);
           }}
-          onSubmitted={() => {
-            setDriverRateVisible(false);
-            setDriverRateRide(null);
-          }}
+          onSubmitted={handleDriverRatingSubmitted}
           rideId={String(driverRateRide.id)}
           fromUserId={driverUid}
           fromRole="driver"
@@ -2119,6 +2227,8 @@ type CurrentRideCockpitProps = {
   chatUnread?: number;
   showChat?: boolean;
   driverUid?: string;
+  showRateClient?: boolean;
+  onRateClient?: () => void;
 };
 
 function CockpitPerformanceGrid({ performance }: { performance: CockpitPerformance }) {
@@ -2168,6 +2278,8 @@ function CurrentRideCockpit({
   chatUnread = 0,
   showChat = false,
   driverUid = '',
+  showRateClient = false,
+  onRateClient,
 }: CurrentRideCockpitProps) {
   const status = normalizeStatus(ride.status);
   const theme = getStatusTheme(status);
@@ -2470,6 +2582,13 @@ function CurrentRideCockpit({
             </Text>
           </TouchableOpacity>
         )}
+
+        {status === 'Terminée' && showRateClient && onRateClient ? (
+          <TouchableOpacity style={styles.cockpitPrimaryBtn} onPress={onRateClient}>
+            <Ionicons name="star-outline" size={24} color="#111" />
+            <Text style={styles.cockpitPrimaryText}>NOTER LE CLIENT</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </Animated.View>
   );
@@ -3350,6 +3469,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   acceptText: { color: '#111', fontSize: 15, fontWeight: '900' },
+  rateClientRow: {
+    marginTop: 14,
+  },
+  rateClientBtn: {
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: gold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  rateClientBtnText: {
+    color: '#111',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  rateClientDoneText: {
+    color: '#C8C8C8',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   rejectBtn: {
     flex: 1,
     height: 54,

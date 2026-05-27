@@ -343,7 +343,11 @@ export function driverHasRatedClientFromRide(
   ride: Record<string, unknown> | null | undefined,
 ): boolean {
   if (!ride) return false;
-  return normalizeRideRatingStatus(ride.ratingStatus).driverRatedClient;
+  if (normalizeRideRatingStatus(ride.ratingStatus).driverRatedClient) {
+    return true;
+  }
+  const clientRating = Number(ride.clientRating);
+  return Number.isFinite(clientRating) && clientRating >= 1 && clientRating <= 5;
 }
 
 export function canClientRateDriverFromRide(
