@@ -27,6 +27,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import CourseTrackingMap from '@/components/CourseTrackingMap';
 import RideChatSheet from '@/components/RideChatSheet';
+import RideRatingSheet from '@/components/RideRatingSheet';
 import { useAuth } from '@/hooks/useAuth';
 import {
   CourseTrackingMapRef,
@@ -53,6 +54,18 @@ import {
 import {
   consumePendingOpenChat,
 } from '@/services/pushNotificationRouting';
+import {
+  formatRidePaymentAmount,
+  getRidePaymentMethodLabel,
+  getRidePaymentStatusConfig,
+  getRidePaymentStatusLabel,
+  normalizeRidePayment,
+} from '@/services/ridePayment';
+import {
+  canClientRateDriverFromRide,
+  clientHasRatedDriverFromRide,
+  readLegacyClientStars,
+} from '@/services/rideRating';
 import {
   getUnreadCountForRole,
   isRideChatOpen,
@@ -156,8 +169,26 @@ export default function CourseTrackingScreen() {
   const params = useLocalSearchParams();
   const { user, role } = useAuth();
   const viewerUid = String(user?.uid ?? '').trim();
-  const rideId = String(params.id || params.rideId || '');
+  const rideId = String(
+    (Array.isArray(params.id) ? params.id[0] : params.id)
+      || (Array.isArray(params.rideId) ? params.rideId[0] : params.rideId)
+      || '',
+  ).trim();
   const hasValidRide = rideId.length > 0;
+
+  useEffect(() => {
+    devLog('[TRACKING] params received', {
+      id: params.id,
+      rideId: params.rideId,
+      openChat: params.openChat,
+      driverId: params.driverId,
+      status: params.status,
+    });
+    devLog('[TRACKING] rideId resolved', { rideId, hasValidRide });
+    if (!hasValidRide) {
+      devLog('[TRACKING] redirect reason', { reason: 'missing_ride_id' });
+    }
+  }, [params.id, params.rideId, params.openChat, params.driverId, params.status, rideId, hasValidRide]);
   const paramDriverId = String(params.driverId || '').trim();
   const [assignedDriverId, setAssignedDriverId] = useState(paramDriverId);
   const [assignedDriverName, setAssignedDriverName] = useState(
@@ -201,6 +232,7 @@ const [demoMode, setDemoMode] = useState(false);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [driverAverageRating, setDriverAverageRating] = useState(5);
   const [chatVisible, setChatVisible] = useState(false);
+  const [ratingVisible, setRatingVisible] = useState(false);
 
 const arrivedAlertShown = useRef(false);
 const finishedAlertShown = useRef(false);
@@ -221,11 +253,21 @@ const lastRealGpsAtRef = useRef(0);
   const statusIconScale = useRef(new Animated.Value(1)).current;
 
   const chatSenderRole = useMemo((): RideMessageSenderRole => {
-    if (role === 'driver' || (viewerUid && viewerUid === driverId)) {
-      return 'driver';
-    }
-    return 'client';
-  }, [role, viewerUid, driverId]);
+    const resolved =
+      role === 'driver' || (viewerUid && viewerUid === driverId)
+        ? 'driver'
+        : 'client';
+    devLog('[RIDE CHAT] role resolved', {
+      rideId,
+      resolved,
+      role,
+      viewerUid,
+      driverId,
+    });
+    return resolved;
+  }, [role, viewerUid, driverId, rideId]);
+
+  const isClientViewer = chatSenderRole === 'client';
 
   const canUseRideChat = Boolean(driverId) && isRideChatOpen(status);
 
@@ -241,14 +283,31 @@ const lastRealGpsAtRef = useRef(0);
     return driverName;
   }, [chatSenderRole, rideData?.client, params.client, driverName]);
 
+  const ridePayment = useMemo(
+    () => normalizeRidePayment(rideData),
+    [rideData],
+  );
+  const ridePaymentStatusConfig = useMemo(
+    () => getRidePaymentStatusConfig(ridePayment.paymentStatus),
+    [ridePayment.paymentStatus],
+  );
+
   useEffect(() => {
     const shouldOpen =
       String(params.openChat ?? '') === '1' || consumePendingOpenChat();
 
     if (shouldOpen && hasValidRide && canUseRideChat) {
+      devLog('[RIDE CHAT] open', {
+        rideId,
+        chatSenderRole,
+        viewerUid,
+        driverId,
+        status,
+        role,
+      });
       setChatVisible(true);
     }
-  }, [params.openChat, hasValidRide, canUseRideChat, rideId]);
+  }, [params.openChat, hasValidRide, canUseRideChat, rideId, chatSenderRole, viewerUid, driverId, status, role]);
 
   const destinationPosition = useMemo(
     () =>
@@ -419,9 +478,12 @@ const lastRealGpsAtRef = useRef(0);
     void requestNotificationPermissions().catch((error) => {
       devError('[CLIENT TRACKING ERROR - requestNotificationPermissions]', error);
     });
-    void getLocation().catch((error) => {
-      devError('[CLIENT TRACKING ERROR - getLocation]', error);
-    });
+
+    if (isClientViewer) {
+      void getLocation().catch((error) => {
+        devError('[CLIENT TRACKING ERROR - getLocation]', error);
+      });
+    }
 
     Animated.loop(
       Animated.sequence([
@@ -441,7 +503,7 @@ const lastRealGpsAtRef = useRef(0);
     return () => {
       removeLocationSubscription();
     };
-  }, [hasValidRide]);
+  }, [hasValidRide, isClientViewer]);
 useEffect(() => {
   if (!hasValidRide || !demoMode) return;
 
@@ -569,35 +631,19 @@ useEffect(() => {
           );
         }
 
-        if (nextStatus === 'Terminée' && !finishedAlertShown.current) {
+        if (
+          nextStatus === 'Terminée'
+          && !finishedAlertShown.current
+          && chatSenderRole === 'client'
+          && !clientHasRatedDriverFromRide(data as Record<string, unknown>)
+        ) {
           finishedAlertShown.current = true;
 
-          Haptics.notificationAsync(
-            Haptics.NotificationFeedbackType.Success
+          void Haptics.notificationAsync(
+            Haptics.NotificationFeedbackType.Success,
           );
 
-          Alert.alert(
-            'Course terminée ✅',
-            'Merci d’avoir utilisé PROTAXI24. Vous pouvez noter votre chauffeur.',
-            [
-              {
-                text: 'Noter le chauffeur',
-                onPress: () =>
-                  router.push({
-                    pathname: '/rating',
-                    params: {
-                      rideId,
-                      driverId: rideDriverId || assignedDriverId,
-                      driverName: rideDriverName || assignedDriverName || driverName,
-                    },
-                  }),
-              },
-              {
-                text: 'Plus tard',
-                onPress: () => router.push('/reservation'),
-              },
-            ]
-          );
+          setRatingVisible(true);
         }
       } catch (error) {
         devError('[CLIENT TRACKING ERROR - rideSnapshotHandler]', error);
@@ -736,6 +782,10 @@ useEffect(() => {
 }, [hasValidRide, demoMode, driverId]);
 
   const getLocation = async () => {
+    if (!isClientViewer) {
+      return;
+    }
+
     try {
       if (Platform.OS === 'web') {
         const lat = Number(params.destinationLatitude);
@@ -779,7 +829,7 @@ useEffect(() => {
 
               setClientPosition(userPosition);
 
-              if (rideId) {
+              if (isClientViewer && rideId) {
                 await updateDoc(doc(db, 'rides', rideId), {
                   clientLatitude: userPosition.latitude,
                   clientLongitude: userPosition.longitude,
@@ -835,7 +885,12 @@ useEffect(() => {
         );
       }
 
-      if (result.distance < 0.08 && rideId && isRideEnRoute(status)) {
+      if (
+        isClientViewer
+        && result.distance < 0.08
+        && rideId
+        && isRideEnRoute(status)
+      ) {
         void updateDoc(doc(db, 'rides', rideId), {
           status: 'Arrivé',
           arrivedAt: new Date(),
@@ -889,6 +944,7 @@ const openNavigationToClient = () => {
  
 
   if (!hasValidRide) {
+    devLog('[TRACKING] redirect reason', { reason: 'invalid_ride_screen' });
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="light" />
@@ -990,16 +1046,18 @@ const openNavigationToClient = () => {
             <Ionicons name="car-sport" size={18} color={gold} />
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.compactBtn}
-            onPress={() => {
-              void getLocation().catch((error) => {
-                devError('[CLIENT TRACKING ERROR - getLocationButton]', error);
-              });
-            }}
-          >
-            <Ionicons name="locate" size={18} color={gold} />
-          </TouchableOpacity>
+          {isClientViewer ? (
+            <TouchableOpacity
+              style={styles.compactBtn}
+              onPress={() => {
+                void getLocation().catch((error) => {
+                  devError('[CLIENT TRACKING ERROR - getLocationButton]', error);
+                });
+              }}
+            >
+              <Ionicons name="locate" size={18} color={gold} />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {__DEV__ ? (
@@ -1075,6 +1133,38 @@ const openNavigationToClient = () => {
           ) : null}
         </View>
 
+        <View style={styles.paymentCardPremium}>
+          <View style={styles.paymentCardLeft}>
+            <Ionicons name="cash-outline" size={18} color={gold} />
+            <View>
+              <Text style={styles.paymentCardTitle}>Paiement</Text>
+              <Text style={styles.paymentCardMethod}>
+                {getRidePaymentMethodLabel(ridePayment.paymentMethod)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.paymentCardRight}>
+            <View
+              style={[
+                styles.paymentStatusPill,
+                {
+                  backgroundColor: ridePaymentStatusConfig.glow,
+                  borderColor: ridePaymentStatusConfig.border,
+                },
+              ]}
+            >
+              <Text
+                style={[styles.paymentStatusPillText, { color: ridePaymentStatusConfig.color }]}
+              >
+                {getRidePaymentStatusLabel(ridePayment.paymentStatus)}
+              </Text>
+            </View>
+            <Text style={styles.paymentCardAmount}>
+              {formatRidePaymentAmount(ridePayment.fareAmount)}
+            </Text>
+          </View>
+        </View>
+
         <View style={styles.driverCardPremium}>
           <View style={styles.avatarRing}>
             <Image
@@ -1135,6 +1225,13 @@ const openNavigationToClient = () => {
                 );
                 return;
               }
+              devLog('[RIDE CHAT] open', {
+                rideId,
+                chatSenderRole,
+                viewerUid,
+                driverId,
+                status,
+              });
               setChatVisible(true);
             }}
             activeOpacity={0.85}
@@ -1179,6 +1276,31 @@ const openNavigationToClient = () => {
           senderRole={chatSenderRole}
           rideStatus={status}
           peerLabel={chatPeerLabel}
+        />
+      ) : null}
+
+      {hasValidRide
+      && viewerUid
+      && chatSenderRole === 'client'
+      && driverId
+      && (ratingVisible || canClientRateDriverFromRide(rideData)) ? (
+        <RideRatingSheet
+          visible={ratingVisible}
+          onClose={() => setRatingVisible(false)}
+          onLater={() => {
+            setRatingVisible(false);
+            router.push('/reservation');
+          }}
+          onSubmitted={() => setRatingVisible(false)}
+          rideId={rideId}
+          fromUserId={viewerUid}
+          fromRole="client"
+          toUserId={driverId}
+          toRole="driver"
+          peerLabel={driverName}
+          toUserName={driverName}
+          existingStars={readLegacyClientStars(rideData)}
+          existingComment={String(rideData?.comment ?? '')}
         />
       ) : null}
     </View>
@@ -1472,6 +1594,53 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  paymentCardPremium: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(212,160,23,0.22)',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  paymentCardLeft: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  paymentCardTitle: {
+    color: '#8A8A8A',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  paymentCardMethod: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  paymentCardRight: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  paymentStatusPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  paymentStatusPillText: {
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  paymentCardAmount: {
+    color: gold,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   driverCardPremium: {
     borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.04)',

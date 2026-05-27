@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 
 import { db } from '@/firebaseConfig';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
+import { buildRidePaymentCreateFields } from '@/services/ridePayment';
 import { buildMapCoordinate, isValidMapCoordinate } from '@/utils/rideTracking';
 
 export type CityRideMode = 'Maintenant' | 'Réserver plus tard';
@@ -151,6 +152,10 @@ export async function submitCityRide(
       driverCar: '',
       driverId: '',
       createdAt: new Date(),
+      ...buildRidePaymentCreateFields({
+        price,
+        estimatedPrice: input.estimatedPrice,
+      }),
       ...pickupFields,
       ...partnerFields,
     });

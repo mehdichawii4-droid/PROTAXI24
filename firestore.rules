@@ -263,13 +263,41 @@ service cloud.firestore {
         ]);
     }
 
+    function ridePaymentStatusIsPending(data) {
+      return !('paymentStatus' in data) || data.paymentStatus == 'pending';
+    }
+
+    function ridePaymentMethodIsCash(data) {
+      return !('paymentMethod' in data) || data.paymentMethod == 'cash';
+    }
+
+    function isDriverRidePaymentConfirmUpdate() {
+      return isDriver()
+        && isAssignedDriver(resource.data)
+        && resource.data.status == 'Terminée'
+        && ridePaymentStatusIsPending(resource.data)
+        && ridePaymentMethodIsCash(resource.data)
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.paymentStatus == 'paid'
+        && request.resource.data.confirmedByDriverId == request.auth.uid
+        && request.resource.data.paidAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'paymentStatus',
+          'paidAt',
+          'confirmedByDriverId',
+          'updatedAt',
+        ]);
+    }
+
     function canUpdateRideStatus() {
       return isAdmin()
         || isDriverRideUpdate()
         || isClientRideCancelUpdate()
         || isClientRideTrackingUpdate()
         || isClientRideArrivedUpdate()
-        || isClientRideRatingUpdate();
+        || isClientRideRatingUpdate()
+        || isDriverRidePaymentConfirmUpdate();
     }
 
     function rideDocData(rideId) {
@@ -309,13 +337,25 @@ service cloud.firestore {
         && (!('readBy' in data) || data.readBy == {});
     }
 
-    function isRideMessageReadByUpdate() {
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
-        && request.resource.data.readBy[request.auth.uid] == request.time
-        && (
-          !('readBy' in resource.data)
-          || request.resource.data.readBy.diff(resource.data.readBy).affectedKeys().hasOnly([request.auth.uid])
-        );
+    function rideMessagePriorReadBy() {
+      return ('readBy' in resource.data) && resource.data.readBy is map
+        ? resource.data.readBy
+        : {};
+    }
+
+    function isRideMessageReadByUpdate(rideId) {
+      let ride = rideDocData(rideId);
+      let priorReadBy = rideMessagePriorReadBy();
+      let nextReadBy = request.resource.data.readBy;
+      return isRideChatParticipantFromRide(ride)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && nextReadBy is map
+        && nextReadBy[request.auth.uid] is timestamp
+        && nextReadBy.diff(priorReadBy).affectedKeys().hasOnly([request.auth.uid])
+        && request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.senderRole == resource.data.senderRole
+        && request.resource.data.text == resource.data.text
+        && request.resource.data.createdAt == resource.data.createdAt;
     }
 
     function isRideChatMetaUpdate() {
@@ -324,6 +364,80 @@ service cloud.firestore {
           'chatSummary',
           'chatUnread',
           'updatedAt',
+        ]);
+    }
+
+    function isRideRatingParticipantFromRide(ride) {
+      return isAdmin()
+        || isRideOwner(ride)
+        || isAssignedDriver(ride);
+    }
+
+    function isRideFinished(ride) {
+      return ride.status == 'Terminée';
+    }
+
+    function expectedRideRatingDocId(fromRole, fromUserId) {
+      return fromRole + '_' + fromUserId;
+    }
+
+    function isValidRideRatingCreate(rideId, ratingId) {
+      let ride = rideDocData(rideId);
+      let data = request.resource.data;
+      return isRideRatingParticipantFromRide(ride)
+        && isRideFinished(ride)
+        && ratingId == expectedRideRatingDocId(data.fromRole, data.fromUserId)
+        && data.rideId == rideId
+        && data.fromUserId == request.auth.uid
+        && data.fromRole in ['client', 'driver']
+        && data.toRole in ['client', 'driver']
+        && data.fromRole != data.toRole
+        && data.stars is number
+        && data.stars >= 1
+        && data.stars <= 5
+        && data.comment is string
+        && data.comment.size() <= 1000
+        && data.createdAt == request.time
+        && (
+          (
+            data.fromRole == 'client'
+            && isRideOwner(ride)
+            && data.toRole == 'driver'
+            && data.toUserId == ride.driverId
+          )
+          || (
+            data.fromRole == 'driver'
+            && isAssignedDriver(ride)
+            && data.toRole == 'client'
+            && data.toUserId == ride.clientUid
+          )
+        )
+        && data.keys().hasOnly([
+          'rideId',
+          'fromUserId',
+          'fromRole',
+          'toUserId',
+          'toRole',
+          'stars',
+          'comment',
+          'createdAt',
+        ]);
+    }
+
+    function isRideRatingStatusUpdate() {
+      return isRideRatingParticipantFromRide(resource.data)
+        && isRideFinished(resource.data)
+        && request.resource.data.status == 'Terminée'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'ratingStatus',
+          'updatedAt',
+          'rating',
+          'comment',
+          'ratedAt',
+          'ratedDriverId',
+          'ratedDriverName',
+          'clientPoints',
+          'clientRating',
         ]);
     }
 
@@ -645,17 +759,27 @@ service cloud.firestore {
       allow read: if isSignedIn() && canReadRide(resource.data);
       allow create: if isClientRideCreate() || isPartnerRideCreate();
 
-      allow update: if isSignedIn() && (canUpdateRideStatus() || isRideChatMetaUpdate());
+      allow update: if isSignedIn() && (
+        canUpdateRideStatus()
+        || isRideChatMetaUpdate()
+        || isRideRatingStatusUpdate()
+      );
       allow delete: if isAdmin();
+
+      match /ratings/{ratingId} {
+        allow read: if isSignedIn() && isRideRatingParticipantFromRide(rideDocData(rideId));
+
+        allow create: if isSignedIn() && isValidRideRatingCreate(rideId, ratingId);
+
+        allow update, delete: if isAdmin();
+      }
 
       match /messages/{messageId} {
         allow read: if isSignedIn() && isRideChatParticipantFromRide(rideDocData(rideId));
 
         allow create: if isSignedIn() && isValidRideMessageCreate(rideId);
 
-        allow update: if isSignedIn()
-          && isRideChatParticipantFromRide(rideDocData(rideId))
-          && isRideMessageReadByUpdate();
+        allow update: if isSignedIn() && isRideMessageReadByUpdate(rideId);
 
         allow delete: if isAdmin();
       }

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -32,6 +33,7 @@ import {
   View,
 } from 'react-native';
 import DriverLiveMap from '@/components/DriverLiveMap';
+import RideRatingSheet from '@/components/RideRatingSheet';
 import { DriverLiveMapRef } from '@/components/DriverLiveMap.types';
 import WebMapPlaceholder from '@/components/WebMapPlaceholder';
 import { useAuthLogout } from '@/hooks/useAuthLogout';
@@ -47,6 +49,23 @@ import {
   consumePendingOpenChat,
   consumePendingPushRideId,
 } from '@/services/pushNotificationRouting';
+import {
+  canConfirmCashPayment,
+  confirmCashPayment,
+  formatRidePaymentAmount,
+  getRideCollectedFareAmount,
+  getRidePaymentMethodLabel,
+  getRidePaymentStatusConfig,
+  getRidePaymentStatusLabel,
+  normalizeRidePayment,
+  RidePaymentError,
+} from '@/services/ridePayment';
+import {
+  canDriverRateClientFromRide,
+  clientHasRatedDriverFromRide,
+  getClientDisplayRating,
+  readLegacyClientStars,
+} from '@/services/rideRating';
 import {
   getUnreadCountForRole,
   isRideChatOpen,
@@ -263,9 +282,6 @@ const getSimulatedEta = (status?: string, ride?: any) => {
   }
 };
 
-const getSimulatedClientRating = (ride?: any) =>
-  Number(ride?.clientRating ?? ride?.rating ?? 4.8);
-
 const getSimulatedDistance = (ride?: any) => {
   if (ride?.distanceKm) return String(ride.distanceKm);
   if (ride?.distance) return String(ride.distance);
@@ -350,6 +366,9 @@ export default function DriversDashboardScreen() {
   const [isOnline, setIsOnline] = useState(true);
 
   const [recentReviews, setRecentReviews] = useState<any[]>([]);
+  const [driverRateRide, setDriverRateRide] = useState<any | null>(null);
+  const [driverRateVisible, setDriverRateVisible] = useState(false);
+  const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
   const [revenueModalVisible, setRevenueModalVisible] = useState(false);
 
   const [driverLocation, setDriverLocation] = useState(DEFAULT_DRIVER_LOCATION);
@@ -433,13 +452,13 @@ export default function DriversDashboardScreen() {
         const reviews = mapRideSnapshotDocs(snapshot)
           .filter(
             (ride: any) =>
-              ride.ratedDriverId === driverUid &&
-              ride.rating
+              String(ride.driverId || '').trim() === driverUid
+              && clientHasRatedDriverFromRide(ride),
           )
           .sort(
             (a: any, b: any) =>
-              new Date(b.ratedAt || 0).getTime() -
-              new Date(a.ratedAt || 0).getTime()
+              new Date(b.ratedAt || b.finishedAt || 0).getTime()
+              - new Date(a.ratedAt || a.finishedAt || 0).getTime(),
           );
 
         setRecentReviews(reviews);
@@ -897,13 +916,32 @@ export default function DriversDashboardScreen() {
     [rides],
   );
 
+  const paymentPendingRide = useMemo(() => {
+    const pending = rides.filter(
+      (ride) =>
+        normalizeStatus(ride.status) === 'Terminée'
+        && canConfirmCashPayment(ride, driverUid),
+    );
+
+    if (pending.length === 0) {
+      return null;
+    }
+
+    return [...pending].sort((a, b) => {
+      const aTime = a.finishedAt?.toDate?.()?.getTime?.() ?? 0;
+      const bTime = b.finishedAt?.toDate?.()?.getTime?.() ?? 0;
+      return bTime - aTime;
+    })[0];
+  }, [rides, driverUid]);
+
   const currentRide = useMemo(() => {
     if (activeRide) return activeRide;
+    if (paymentPendingRide) return paymentPendingRide;
     return (
       rides.find((ride) => normalizeStatus(ride.status) === 'Attribuée') ??
       null
     );
-  }, [rides, activeRide]);
+  }, [rides, activeRide, paymentPendingRide]);
 
   const completedRides = useMemo(
     () => rides.filter((ride) => normalizeStatus(ride.status) === 'Terminée'),
@@ -927,10 +965,10 @@ export default function DriversDashboardScreen() {
   const todayEarnings = useMemo(
     () =>
       todayCompletedRides.reduce(
-        (sum, ride) => sum + parsePrice(ride.price),
-        0
+        (sum, ride) => sum + getRideCollectedFareAmount(ride),
+        0,
       ),
-    [todayCompletedRides]
+    [todayCompletedRides],
   );
 
   const driverKpi = useMemo(() => {
@@ -1004,14 +1042,14 @@ export default function DriversDashboardScreen() {
 
   const totalEarnings = useMemo(
     () =>
-      completedRides.reduce((sum, ride) => sum + parsePrice(ride.price), 0),
-    [completedRides]
+      completedRides.reduce(
+        (sum, ride) => sum + getRideCollectedFareAmount(ride),
+        0,
+      ),
+    [completedRides],
   );
 
-  const liveEarnings = useMemo(
-    () => rides.reduce((sum, ride) => sum + parsePrice(ride.price), 0),
-    [rides]
-  );
+  const liveEarnings = todayEarnings;
 
   const cockpitPerformance = useMemo(
     () =>
@@ -1024,14 +1062,25 @@ export default function DriversDashboardScreen() {
   );
 
   const openRideTracking = (ride: any, options?: { openChat?: boolean }) => {
-    if (!ride?.id) return;
+    const resolvedRideId = String(ride?.id || ride?.rideId || '').trim();
+    if (!resolvedRideId) {
+      devLog('[RIDE CHAT] openRideChat pressed — missing ride id', { ride });
+      return;
+    }
+
+    devLog('[RIDE CHAT] openRideChat pressed', {
+      rideId: resolvedRideId,
+      driverId: ride?.driverId || driverUid,
+      status: ride?.status,
+      openChat: Boolean(options?.openChat),
+    });
 
     router.push({
       pathname: '/course-tracking',
       params: {
-        id: ride.id,
-        rideId: ride.id,
-        driverId: ride.driverId || driverUid,
+        id: resolvedRideId,
+        rideId: resolvedRideId,
+        driverId: String(ride.driverId || driverUid || ''),
         driverName: ride.driverName || driverDisplayName,
         status: ride.status || 'En attente',
         departure: ride.departure || '',
@@ -1073,6 +1122,30 @@ export default function DriversDashboardScreen() {
     });
 
     if (url) Linking.openURL(url);
+  };
+
+  const handleConfirmPayment = async (rideId: string) => {
+    if (!driverUid || confirmingPaymentId) {
+      return;
+    }
+
+    devLog('[RIDE PAYMENT] confirm pressed', { rideId, driverUid });
+
+    setConfirmingPaymentId(rideId);
+    try {
+      await confirmCashPayment(rideId, driverUid);
+      devLog('[RIDE PAYMENT] confirm success', { rideId, driverUid });
+      showDriverToast('Paiement enregistré');
+    } catch (error) {
+      const message =
+        error instanceof RidePaymentError
+          ? error.message
+          : 'Impossible de confirmer le paiement.';
+      Alert.alert('Paiement', message);
+      devError('[RIDE PAYMENT] confirm failed', { rideId, driverUid, error });
+    } finally {
+      setConfirmingPaymentId(null);
+    }
   };
 
   const updateRideStatus = async (rideId: string, status: string) => {
@@ -1185,6 +1258,21 @@ export default function DriversDashboardScreen() {
 
           const position = latestGpsPositionRef.current ?? driverLocation;
           void tryAutoMarkArrivedRef.current?.(position);
+        }
+
+        if (finalStatus === 'Terminée') {
+          const finishedRide = ridesRef.current.find((ride) => ride.id === rideId);
+          const rideSnapshot = finishedRide
+            ? { ...finishedRide, status: 'Terminée' }
+            : { id: rideId, status: 'Terminée' };
+
+          if (canDriverRateClientFromRide(rideSnapshot)) {
+            setDriverRateRide(rideSnapshot);
+            setDriverRateVisible(true);
+            void Haptics.notificationAsync(
+              Haptics.NotificationFeedbackType.Success,
+            );
+          }
         }
       }
 
@@ -1316,6 +1404,18 @@ export default function DriversDashboardScreen() {
             <Text style={styles.acceptText}>TERMINER</Text>
           </TouchableOpacity>
         )}
+
+        {canConfirmCashPayment(ride, driverUid) ? (
+          <TouchableOpacity
+            style={styles.acceptBtn}
+            onPress={() => handleConfirmPayment(ride.id)}
+            disabled={confirmingPaymentId === ride.id}
+          >
+            <Text style={styles.acceptText}>
+              {confirmingPaymentId === ride.id ? 'ENREGISTREMENT…' : 'PAIEMENT REÇU'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </>
     );
   };
@@ -1447,6 +1547,26 @@ export default function DriversDashboardScreen() {
             onStart={() => updateRideStatus(currentRide.id, 'En route')}
             onArrived={() => updateRideStatus(currentRide.id, 'Arrivé')}
             onFinish={() => updateRideStatus(currentRide.id, 'Terminée')}
+            onConfirmPayment={() => handleConfirmPayment(currentRide.id)}
+            isConfirmingPayment={confirmingPaymentId === currentRide.id}
+            driverUid={driverUid}
+            showChat={
+              Boolean(currentRide.driverId)
+              && isRideChatOpen(normalizeStatus(currentRide.status))
+            }
+            chatUnread={getUnreadCountForRole(
+              normalizeRideChatUnread(currentRide.chatUnread),
+              'driver',
+            )}
+            onOpenChat={() => {
+              devLog('[RIDE CHAT] open', {
+                rideId: currentRide.id,
+                role: 'driver',
+                driverId: currentRide.driverId,
+                status: normalizeStatus(currentRide.status),
+              });
+              openRideChat(currentRide);
+            }}
           />
         ) : (
           <View style={styles.emptyBox}>
@@ -1645,7 +1765,7 @@ export default function DriversDashboardScreen() {
     >
       <View>
         <Text style={styles.reviewRating}>
-          ⭐ {review.rating}/5
+          ⭐ {readLegacyClientStars(review) ?? review.rating}/5
         </Text>
 
         <Text style={styles.reviewComment}>
@@ -1660,6 +1780,34 @@ export default function DriversDashboardScreen() {
 
         <View style={{ height: 45 }} />
       </ScrollView>
+
+      {driverRateRide
+      && driverUid
+      && String(driverRateRide.clientUid || '').trim() ? (
+        <RideRatingSheet
+          visible={driverRateVisible}
+          onClose={() => {
+            setDriverRateVisible(false);
+            setDriverRateRide(null);
+          }}
+          onLater={() => {
+            setDriverRateVisible(false);
+            setDriverRateRide(null);
+          }}
+          onSubmitted={() => {
+            setDriverRateVisible(false);
+            setDriverRateRide(null);
+          }}
+          rideId={String(driverRateRide.id)}
+          fromUserId={driverUid}
+          fromRole="driver"
+          toUserId={String(driverRateRide.clientUid || '').trim()}
+          toRole="client"
+          peerLabel={String(driverRateRide.client || 'Client')}
+          existingStars={getClientDisplayRating(driverRateRide)}
+          existingComment=""
+        />
+      ) : null}
 
       <Modal
         visible={revenueModalVisible}
@@ -1912,6 +2060,12 @@ type CurrentRideCockpitProps = {
   onStart: () => void;
   onArrived: () => void;
   onFinish: () => void;
+  onConfirmPayment: () => void;
+  isConfirmingPayment: boolean;
+  onOpenChat?: () => void;
+  chatUnread?: number;
+  showChat?: boolean;
+  driverUid?: string;
 };
 
 function CockpitPerformanceGrid({ performance }: { performance: CockpitPerformance }) {
@@ -1955,11 +2109,21 @@ function CurrentRideCockpit({
   onStart,
   onArrived,
   onFinish,
+  onConfirmPayment,
+  isConfirmingPayment,
+  onOpenChat,
+  chatUnread = 0,
+  showChat = false,
+  driverUid = '',
 }: CurrentRideCockpitProps) {
   const status = normalizeStatus(ride.status);
   const theme = getStatusTheme(status);
   const liveEta = useLiveEta(status, ride);
-  const clientRating = getSimulatedClientRating(ride);
+  const clientRating = getClientDisplayRating(ride);
+  const payment = normalizeRidePayment(ride);
+  const paymentStatusConfig = getRidePaymentStatusConfig(payment.paymentStatus);
+  const showConfirmPayment = canConfirmCashPayment(ride, driverUid);
+  const collectLabel = formatRidePaymentAmount(payment.fareAmount);
   const distance = getSimulatedDistance(ride);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(18)).current;
@@ -2074,7 +2238,32 @@ function CurrentRideCockpit({
           </View>
         </View>
 
-        <Text style={styles.cockpitPrice}>{ride.price || 'Prix à confirmer'}</Text>
+        <Text style={styles.cockpitPrice}>{collectLabel}</Text>
+        <Text style={styles.cockpitPriceHint}>Montant à encaisser</Text>
+      </View>
+
+      <View style={styles.cockpitPaymentCard}>
+        <View style={styles.cockpitPaymentRow}>
+          <View>
+            <Text style={styles.cockpitPaymentLabel}>Paiement</Text>
+            <Text style={styles.cockpitPaymentMethod}>
+              {getRidePaymentMethodLabel(payment.paymentMethod)}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.cockpitPaymentBadge,
+              {
+                backgroundColor: paymentStatusConfig.glow,
+                borderColor: paymentStatusConfig.border,
+              },
+            ]}
+          >
+            <Text style={[styles.cockpitPaymentBadgeText, { color: paymentStatusConfig.color }]}>
+              {getRidePaymentStatusLabel(payment.paymentStatus)}
+            </Text>
+          </View>
+        </View>
       </View>
 
       <RideStatusTimeline currentStatus={status} />
@@ -2107,7 +2296,9 @@ function CurrentRideCockpit({
           <CockpitInfo
             icon="star"
             label="Note client"
-            value={`${clientRating.toFixed(1)} ⭐`}
+            value={
+              clientRating != null ? `${clientRating} ⭐` : '—'
+            }
           />
         </View>
       </View>
@@ -2143,6 +2334,22 @@ function CurrentRideCockpit({
             </View>
             <Text style={styles.cockpitActionLabel}>Voir suivi</Text>
           </TouchableOpacity>
+
+          {showChat && onOpenChat ? (
+            <TouchableOpacity style={styles.cockpitActionBtn} onPress={onOpenChat}>
+              <View style={styles.cockpitActionIconWrap}>
+                <Ionicons name="chatbubble-ellipses" size={22} color={gold} />
+                {chatUnread > 0 ? (
+                  <View style={styles.cockpitChatUnreadDot}>
+                    <Text style={styles.cockpitChatUnreadText}>
+                      {chatUnread > 9 ? '9+' : chatUnread}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              <Text style={styles.cockpitActionLabel}>Messages</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
 
@@ -2181,6 +2388,23 @@ function CurrentRideCockpit({
           <TouchableOpacity style={styles.cockpitPrimaryBtn} onPress={onFinish}>
             <Ionicons name="flag" size={24} color="#111" />
             <Text style={styles.cockpitPrimaryText}>TERMINER</Text>
+          </TouchableOpacity>
+        )}
+
+        {showConfirmPayment && (
+          <TouchableOpacity
+            style={[
+              styles.cockpitPaymentBtn,
+              isConfirmingPayment && styles.cockpitPaymentBtnDisabled,
+            ]}
+            onPress={onConfirmPayment}
+            disabled={isConfirmingPayment}
+            activeOpacity={0.9}
+          >
+            <Ionicons name="cash" size={24} color="#111" />
+            <Text style={styles.cockpitPrimaryText}>
+              {isConfirmingPayment ? 'ENREGISTREMENT…' : 'PAIEMENT REÇU'}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -2534,6 +2758,61 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  cockpitPriceHint: {
+    color: '#8A8A8A',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  cockpitPaymentCard: {
+    backgroundColor: '#111',
+    borderColor: '#262626',
+    borderRadius: 16,
+    borderWidth: 1,
+    marginBottom: 14,
+    padding: 14,
+  },
+  cockpitPaymentRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  cockpitPaymentLabel: {
+    color: '#8A8A8A',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  cockpitPaymentMethod: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  cockpitPaymentBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  cockpitPaymentBadgeText: {
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  cockpitPaymentBtn: {
+    alignItems: 'center',
+    backgroundColor: '#4ADE80',
+    borderRadius: 16,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingVertical: 16,
+    width: '100%',
+  },
+  cockpitPaymentBtnDisabled: {
+    opacity: 0.65,
+  },
   cockpitPrice: {
     color: '#FFF',
     fontSize: 40,
@@ -2713,6 +2992,22 @@ const styles = StyleSheet.create({
   },
   cockpitActionWhatsapp: {
     backgroundColor: 'rgba(37,211,102,0.12)',
+  },
+  cockpitChatUnreadDot: {
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    justifyContent: 'center',
+    minWidth: 16,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -4,
+    top: -4,
+  },
+  cockpitChatUnreadText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
   cockpitActionLabel: {
     color: '#FFF',

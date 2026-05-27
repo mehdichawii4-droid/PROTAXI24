@@ -8,6 +8,7 @@ import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '../firebaseConfig';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
+import { buildRidePaymentCreateFields } from '@/services/ridePayment';
 
 
 import {
@@ -93,6 +94,8 @@ export default function ConfirmationScreen() {
       JSON.stringify(updatedReservations)
     );
 
+    const priceLabel = `${finalPrice} DA`;
+
     const rideDoc = await addDoc(collection(db, 'rides'), {
       clientUid,
       clientName,
@@ -104,7 +107,7 @@ export default function ConfirmationScreen() {
       airport: String(airport || ''),
       address: String(address || ''),
       date: String(date || ''),
-      price: `${finalPrice} DA`,
+      price: priceLabel,
       time: String(time || '—'),
       passengers: String(passengers || '1'),
       bags: String(bags || '0'),
@@ -114,6 +117,7 @@ export default function ConfirmationScreen() {
       driverCar: '',
       driverId: '',
       createdAt: new Date(),
+      ...buildRidePaymentCreateFields({ price: priceLabel }),
       ...partnerFields,
     });
 

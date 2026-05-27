@@ -24,7 +24,7 @@ import {
   type RideMessage,
   type RideMessageSenderRole,
 } from '@/services/rideChat';
-import { devError } from '@/utils/devLog';
+import { devError, devLog } from '@/utils/devLog';
 
 const gold = '#D4A017';
 const green = '#2ECC71';
@@ -68,9 +68,23 @@ export default function RideChatSheet({
       return undefined;
     }
 
-    const unsubscribe = subscribeRideMessages(rideId, setMessages);
+    devLog('[RIDE CHAT] subscribe start', { rideId, senderRole, senderId });
+    const unsubscribe = subscribeRideMessages(
+      rideId,
+      (nextMessages) => {
+        devLog('[RIDE CHAT] messages count', {
+          rideId,
+          senderRole,
+          count: nextMessages.length,
+        });
+        setMessages(nextMessages);
+      },
+      (error) => {
+        devError('[RIDE CHAT] subscribe error', { rideId, senderRole, error });
+      },
+    );
     return unsubscribe;
-  }, [visible, rideId]);
+  }, [visible, rideId, senderRole, senderId]);
 
   useEffect(() => {
     if (!visible) {

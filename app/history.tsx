@@ -27,6 +27,12 @@ import {
   normalizeTourBookingRecord,
   type TourBookingRecord,
 } from '@/services/tourBookingHistory';
+import {
+  formatRidePaymentAmount,
+  getRidePaymentStatusConfig,
+  getRidePaymentStatusLabel,
+  normalizeRidePayment,
+} from '@/services/ridePayment';
 import { devError, devLog } from '@/utils/devLog';
 import { PROTAXI_ROUTES } from '@/utils/navigation';
 
@@ -44,6 +50,9 @@ type TaxiHistoryItem = {
   time?: string;
   passengers?: string;
   price?: string | number;
+  fareAmount?: unknown;
+  paymentMethod?: unknown;
+  paymentStatus?: unknown;
 };
 
 const TAXI_HISTORY_STATUSES = new Set(['Terminée', 'Annulée']);
@@ -70,6 +79,9 @@ function normalizeFirestoreRideToHistoryItem(
     time: String(data.time || ''),
     passengers: String(data.passengers || '1'),
     price,
+    fareAmount: data.fareAmount,
+    paymentMethod: data.paymentMethod,
+    paymentStatus: data.paymentStatus,
   };
 }
 
@@ -283,6 +295,8 @@ export default function HistoryScreen() {
 
         {history.map((item) => {
           const isCancelled = item.status === 'Annulée';
+          const ridePayment = normalizeRidePayment(item as Record<string, unknown>);
+          const paymentStatusConfig = getRidePaymentStatusConfig(ridePayment.paymentStatus);
 
           return (
             <View key={item.id} style={styles.card}>
@@ -317,12 +331,32 @@ export default function HistoryScreen() {
               <TaxiInfoRow icon="calendar-outline" text={item.date || '-'} />
               <TaxiInfoRow icon="time-outline" text={item.time || '-'} />
               <TaxiInfoRow icon="people-outline" text={`${item.passengers || '1'} passagers`} />
+              <TaxiInfoRow
+                icon="cash-outline"
+                text={formatRidePaymentAmount(ridePayment.fareAmount)}
+              />
+              <View style={styles.paymentBadgeRow}>
+                <View
+                  style={[
+                    styles.paymentBadge,
+                    {
+                      backgroundColor: paymentStatusConfig.glow,
+                      borderColor: paymentStatusConfig.border,
+                    },
+                  ]}
+                >
+                  <Ionicons name="wallet-outline" size={14} color={paymentStatusConfig.color} />
+                  <Text style={[styles.paymentBadgeText, { color: paymentStatusConfig.color }]}>
+                    {getRidePaymentStatusLabel(ridePayment.paymentStatus)}
+                  </Text>
+                </View>
+              </View>
 
               <View style={styles.bottomRow}>
                 <View>
-                  <Text style={styles.priceLabel}>Prix</Text>
+                  <Text style={styles.priceLabel}>Montant</Text>
                   <Text style={styles.price}>
-                    {Number(item.price || 0).toLocaleString('fr-FR')} DZD
+                    {formatRidePaymentAmount(ridePayment.fareAmount)}
                   </Text>
                 </View>
 
@@ -625,6 +659,24 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,75,75,0.35)',
   },
 
+  paymentBadgeRow: {
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  paymentBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  paymentBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
   badgeText: {
     fontSize: 13,
     fontWeight: '900',

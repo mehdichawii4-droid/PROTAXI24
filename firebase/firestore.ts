@@ -112,6 +112,35 @@ export function getRideMessagesCollectionRef(rideId: string): CollectionReferenc
   return collection(getRideDocRef(normalizedRideId), 'messages');
 }
 
+export function buildRideRatingDocId(fromRole: string, fromUserId: string): string {
+  const role = String(fromRole || '').trim();
+  const uid = String(fromUserId || '').trim();
+  if (!role || !uid) {
+    throw new Error('fromRole and fromUserId are required to build a ride rating id.');
+  }
+  return `${role}_${uid}`;
+}
+
+export function getRideRatingsCollectionRef(rideId: string): CollectionReference {
+  const normalizedRideId = rideId.trim();
+  if (!normalizedRideId) {
+    throw new Error('rideId is required to access ride ratings.');
+  }
+
+  return collection(getRideDocRef(normalizedRideId), 'ratings');
+}
+
+export function getRideRatingDocRef(
+  rideId: string,
+  fromRole: string,
+  fromUserId: string,
+): DocumentReference {
+  return doc(
+    getRideRatingsCollectionRef(rideId),
+    buildRideRatingDocId(fromRole, fromUserId),
+  );
+}
+
 export function getDriverLiveDocRef(driverId: string): DocumentReference {
   const normalizedDriverId = driverId.trim();
   if (!normalizedDriverId) {

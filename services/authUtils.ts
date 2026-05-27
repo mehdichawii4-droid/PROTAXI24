@@ -27,6 +27,7 @@ export const DRIVER_ROUTES = new Set([
   'drivers-dashboard',
   'driver-profile',
   'tour-staff-dashboard',
+  'course-tracking',
 ]);
 
 export const ADMIN_ROUTES = new Set([

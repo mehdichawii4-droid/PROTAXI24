@@ -25,6 +25,13 @@ import {
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
 import { devError } from '@/utils/devLog';
+import { canClientRateDriverFromRide } from '@/services/rideRating';
+import {
+  formatRidePaymentAmount,
+  getRidePaymentStatusConfig,
+  getRidePaymentStatusLabel,
+  normalizeRidePayment,
+} from '@/services/ridePayment';
 import { formatRidePriceDzd } from '@/utils/rideTracking';
 import { db } from '../firebaseConfig';
 
@@ -230,7 +237,9 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
 const isCancelled = status === 'Annulée';
 const isFinished = status === 'Terminée';
 const canCancel = ['En attente', 'Attribuée', 'Acceptée'].includes(status);
-const canRate = isFinished && !item.rating;
+const canRate = isFinished && canClientRateDriverFromRide(item);
+const ridePayment = normalizeRidePayment(item);
+const paymentStatusConfig = getRidePaymentStatusConfig(ridePayment.paymentStatus);
 const reservationId = String(item.id || '').slice(-6);
           
           return (
@@ -286,8 +295,25 @@ const reservationId = String(item.id || '').slice(-6);
                   
                 <InfoRow
   icon="cash-outline"
-  text={formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}
+  text={formatRidePaymentAmount(ridePayment.fareAmount)}
 />
+
+                <View style={styles.paymentBadgeRow}>
+                  <View
+                    style={[
+                      styles.paymentBadge,
+                      {
+                        backgroundColor: paymentStatusConfig.glow,
+                        borderColor: paymentStatusConfig.border,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="wallet-outline" size={14} color={paymentStatusConfig.color} />
+                    <Text style={[styles.paymentBadgeText, { color: paymentStatusConfig.color }]}>
+                      {getRidePaymentStatusLabel(ridePayment.paymentStatus)}
+                    </Text>
+                  </View>
+                </View>
 
 <InfoRow
   icon="gift-outline"
@@ -533,6 +559,24 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
 
+  paymentBadgeRow: {
+    marginBottom: 8,
+    marginTop: 2,
+  },
+  paymentBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  paymentBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
   statusBadge: {
     paddingVertical: 7,
     paddingHorizontal: 10,

@@ -463,6 +463,16 @@ export const onRideRated = onDocumentUpdated(
       return;
     }
 
+    const afterRatingStatus = after.ratingStatus as
+      | { clientRatedDriver?: boolean }
+      | undefined;
+    if (afterRatingStatus?.clientRatedDriver === true) {
+      logger.info('[RATING FN] skip legacy onRideRated — V2 ratingStatus path', {
+        rideId,
+      });
+      return;
+    }
+
     const driverId = String(after.ratedDriverId ?? after.driverId ?? '').trim();
     if (!driverId) {
       logger.warn('[RATING FN] skip — missing driverId on rated ride', { rideId });
@@ -477,8 +487,18 @@ export const onRideRated = onDocumentUpdated(
     await db.runTransaction(async (transaction) => {
       const driverLiveSnap = await transaction.get(driverLiveRef);
 
-      if (driverLiveSnap.exists && driverLiveSnap.data()?.lastRatingRideId === rideId) {
-        logger.info('[RATING FN] skip — ride already aggregated', { rideId, driverId });
+      const legacyAggregateId = `${rideId}_legacy_client_rating`;
+      if (
+        driverLiveSnap.exists
+        && (
+          driverLiveSnap.data()?.lastRatingRideId === rideId
+          || driverLiveSnap.data()?.lastAggregatedRatingId === legacyAggregateId
+        )
+      ) {
+        logger.info('[RATING FN] skip legacy onRideRated — already aggregated', {
+          rideId,
+          driverId,
+        });
         return;
       }
 
@@ -503,6 +523,7 @@ export const onRideRated = onDocumentUpdated(
           lastRating: afterRating,
           lastComment: comment,
           lastRatingRideId: rideId,
+          lastAggregatedRatingId: legacyAggregateId,
           updatedAt,
         },
         { merge: true },
@@ -520,7 +541,7 @@ export const onRideRated = onDocumentUpdated(
       );
     });
 
-    logger.info('[RATING FN] driver stats updated', {
+    logger.info('[RATING FN] legacy driver stats updated', {
       rideId,
       driverId,
       rating: afterRating,
@@ -759,3 +780,4 @@ export const onRideAssignmentTimeout = onSchedule(
 );
 
 export { onRideCreatedAutoDispatch } from './autoDispatch';
+export { onRideRatingCreated } from './rideRating';
