@@ -43,6 +43,7 @@ import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
 import { submitCityRide } from '@/services/cityRideService';
 import { reverseGeocodeCoordinate } from '@/utils/cityMapGeocode';
+import { isValidMapCoordinate } from '@/utils/rideTracking';
 
 const gold = '#D4A017';
 const green = '#4ADE80';
@@ -405,6 +406,12 @@ export default function CityScreen() {
           vehicleType: rideData.selectedVehicle,
           estimatedDuration: rideData.estimatedDuration,
           estimatedPrice: rideData.estimatedPrice,
+          ...(isValidMapCoordinate(pickupCoordinate)
+            ? {
+                pickupLatitude: pickupCoordinate.latitude,
+                pickupLongitude: pickupCoordinate.longitude,
+              }
+            : {}),
         },
         {
           clientUid: getFirebaseAuth().currentUser?.uid,

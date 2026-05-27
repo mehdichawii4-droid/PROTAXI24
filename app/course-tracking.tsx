@@ -5,7 +5,6 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import {
-  collection,
   doc,
   onSnapshot,
   updateDoc,
@@ -399,26 +398,6 @@ const lastRealGpsAtRef = useRef(0);
       removeLocationSubscription();
     };
   }, [hasValidRide]);
-  useEffect(() => {
-  if (!hasValidRide) return;
-
-  const unsubscribe = onSnapshot(
-    collection(db, 'driversLive'),
-    (snapshot) => {
-      const driversData = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-
-      setDrivers(driversData);
-    },
-    (error) => {
-      devError('[CLIENT RIDE SNAPSHOT ERROR - driversLiveCollection]', error);
-    },
-  );
-
-  return () => unsubscribe();
-}, [hasValidRide]);
 useEffect(() => {
   if (!hasValidRide || !demoMode) return;
 

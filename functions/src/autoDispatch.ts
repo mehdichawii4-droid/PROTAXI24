@@ -354,6 +354,70 @@ async function autoDispatchNearestEligibleDriver(params: {
   throw lastError ?? new AutoDispatchError('no_driver', 'Aucun chauffeur disponible.');
 }
 
+export async function attemptAutoDispatchForRide(
+  db: admin.firestore.Firestore,
+  rideId: string,
+  ride: Record<string, unknown>,
+): Promise<void> {
+  const status = normalizeRideStatus(ride.status);
+  const rideMode = String(ride.rideMode || '').trim();
+
+  if (status !== 'En attente') {
+    logger.info('[AUTO DISPATCH] skip — status not En attente', { rideId, status });
+    return;
+  }
+
+  if (rideMode !== 'Maintenant') {
+    logger.info('[AUTO DISPATCH] skip — rideMode not Maintenant', { rideId, rideMode });
+    return;
+  }
+
+  if (hasAssignedDriverId(ride.driverId)) {
+    logger.info('[AUTO DISPATCH] skip — driver already assigned', { rideId });
+    return;
+  }
+
+  const rideCoords = getRideCoordinates(ride);
+  logger.info('[AUTO DISPATCH] start', {
+    rideId,
+    latitude: rideCoords.latitude,
+    longitude: rideCoords.longitude,
+  });
+
+  try {
+    const result = await autoDispatchNearestEligibleDriver({ db, rideId, ride });
+
+    logger.info('[AUTO DISPATCH] assigned', {
+      rideId,
+      driverId: result.driverId,
+      driverName: result.driverName,
+      distanceM: Math.round(result.distanceM),
+    });
+  } catch (error) {
+    if (error instanceof AutoDispatchError) {
+      if (error.code === 'no_driver') {
+        logger.info('[AUTO DISPATCH] no driver — ride stays En attente', { rideId });
+        return;
+      }
+
+      if (error.code === 'ride_already_assigned') {
+        logger.info('[AUTO DISPATCH] already assigned — skip', { rideId });
+        return;
+      }
+
+      if (error.code === 'driver_not_available') {
+        logger.info('[AUTO DISPATCH] driver not available — ride stays En attente', {
+          rideId,
+          code: error.code,
+        });
+        return;
+      }
+    }
+
+    logger.error('[AUTO DISPATCH] failed', { rideId, error });
+  }
+}
+
 export const onRideCreatedAutoDispatch = onDocumentCreated(
   {
     document: 'rides/{rideId}',
@@ -368,63 +432,7 @@ export const onRideCreatedAutoDispatch = onDocumentCreated(
       return;
     }
 
-    const status = normalizeRideStatus(ride.status);
-    const rideMode = String(ride.rideMode || '').trim();
-
-    if (status !== 'En attente') {
-      logger.info('[AUTO DISPATCH] skip — status not En attente', { rideId, status });
-      return;
-    }
-
-    if (rideMode !== 'Maintenant') {
-      logger.info('[AUTO DISPATCH] skip — rideMode not Maintenant', { rideId, rideMode });
-      return;
-    }
-
-    if (hasAssignedDriverId(ride.driverId)) {
-      logger.info('[AUTO DISPATCH] skip — driver already assigned', { rideId });
-      return;
-    }
-
-    const rideCoords = getRideCoordinates(ride);
-    logger.info('[AUTO DISPATCH] start', {
-      rideId,
-      latitude: rideCoords.latitude,
-      longitude: rideCoords.longitude,
-    });
-
-    try {
-      const db = admin.firestore();
-      const result = await autoDispatchNearestEligibleDriver({ db, rideId, ride });
-
-      logger.info('[AUTO DISPATCH] assigned', {
-        rideId,
-        driverId: result.driverId,
-        driverName: result.driverName,
-        distanceM: Math.round(result.distanceM),
-      });
-    } catch (error) {
-      if (error instanceof AutoDispatchError) {
-        if (error.code === 'no_driver') {
-          logger.info('[AUTO DISPATCH] no driver — ride stays En attente', { rideId });
-          return;
-        }
-
-        if (error.code === 'ride_already_assigned') {
-          logger.info('[AUTO DISPATCH] already assigned — skip', { rideId });
-          return;
-        }
-
-        if (error.code === 'driver_not_available') {
-          logger.info('[AUTO DISPATCH] driver not available — ride stays En attente', {
-            rideId,
-            code: error.code,
-          });
-          return;
-        }
-      }
-
-      logger.error('[AUTO DISPATCH] failed', { rideId, error });
-    }
+    const db = admin.firestore();
+    await attemptAutoDispatchForRide(db, rideId, ride);
   },
 );

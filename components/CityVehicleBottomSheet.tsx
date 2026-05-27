@@ -1,4 +1,9 @@
-import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
+import BottomSheet, {
+  BottomSheetFooter,
+  BottomSheetScrollView,
+  BottomSheetView,
+  type BottomSheetFooterProps,
+} from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -45,11 +50,13 @@ export const SHEET_SNAP = {
   expanded: SCREEN_HEIGHT * 0.86,
 } as const;
 
+const MID_SHEET_PROGRESS =
+  (SHEET_SNAP.mid - SHEET_SNAP.collapsed) / (SHEET_SNAP.expanded - SHEET_SNAP.collapsed);
+
 const SPRING = { damping: 24, stiffness: 220, mass: 0.85 };
 const HANDLE_ZONE_PX = 28;
 const HERO_ROW_PX = 80;
 const BOTTOM_BLOCK_PX = 236;
-const BOTTOM_GLIDE_PX = 100;
 
 const SNAP_INDEX = {
   collapsed: 0,
@@ -82,7 +89,7 @@ function readSheetProgress(
 
 function earlySheetProgress(progress: number): number {
   'worklet';
-  return interpolate(progress, [0, 0.25, 1], [0, 1, 1], Extrapolation.CLAMP);
+  return interpolate(progress, [0, 0.08, 1], [0, 1, 1], Extrapolation.CLAMP);
 }
 
 function snapIndexForHeight(target: number): number {
@@ -398,46 +405,119 @@ export default function CityVehicleBottomSheet({
     [bottomBlockHeight],
   );
 
+  const topZoneStyle = useAnimatedStyle(() => ({
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  }));
+
   const listPaneStyle = useAnimatedStyle(() => {
     const progress = readSheetProgress(sheetProgressShared, sheetHeightDerived);
-    const earlyProgress = earlySheetProgress(progress);
     const bodyH = Math.max(0, sheetHeightDerived.value - handleZoneHeight.value);
-    const maxListH = Math.max(0, bodyH - heroRowHeight.value - bottomBlockHeight.value);
-    const footerOffset = progress * BOTTOM_GLIDE_PX;
-    const listH = Math.max(0, earlyProgress * maxListH - footerOffset);
+    const availableTopSpace = Math.max(
+      0,
+      bodyH - bottomBlockHeight.value - heroRowHeight.value,
+    );
+    const midListHeight = Math.min(availableTopSpace, Math.max(availableTopSpace * 0.98, 200));
+    const listMaxH = interpolate(
+      progress,
+      [0, 0.05, MID_SHEET_PROGRESS, 1],
+      [0, 0, midListHeight, availableTopSpace],
+      Extrapolation.CLAMP,
+    );
+    const listFlex = progress > 0.05 && listMaxH > 1 ? 1 : 0;
+
     return {
-      flex: 0,
-      flexGrow: 0,
-      height: listH,
+      flex: listFlex,
+      flexGrow: listFlex,
+      flexShrink: 1,
       minHeight: 0,
-      opacity: interpolate(earlyProgress, [0, 0.03], [0, 1], Extrapolation.CLAMP),
+      maxHeight: listMaxH,
+      opacity: interpolate(progress, [0, 0.05, 0.12], [0, 0, 1], Extrapolation.CLAMP),
       overflow: 'hidden',
     };
   });
 
-  const bottomBlockGlideStyle = useAnimatedStyle(() => {
-    const progress = sheetProgressShared?.value ?? sheetProgress(sheetHeightDerived.value);
-    const earlyProgress = earlySheetProgress(progress);
+  const renderFooter = useCallback(
+    (footerProps: BottomSheetFooterProps) => (
+      <BottomSheetFooter
+        {...footerProps}
+        bottomInset={footerPad}
+        style={styles.sheetFooter}
+      >
+        <View
+          style={styles.bottomBlock}
+          onLayout={(event) => onBottomBlockLayout(event.nativeEvent.layout.height)}
+        >
+          <View style={styles.optionsGrid}>
+            <TouchableOpacity style={styles.optionCell} onPress={onOpenPassengers} activeOpacity={0.85}>
+              <Ionicons name="person-outline" size={17} color={green} />
+              <Text style={styles.optionText} numberOfLines={1}>
+                {passengersLabel}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionCell} onPress={onOpenOptions} activeOpacity={0.85}>
+              <Ionicons name="options-outline" size={17} color={green} />
+              <Text style={styles.optionText}>Options</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionCell} onPress={onOpenPayment} activeOpacity={0.85}>
+              <Ionicons name="cash-outline" size={17} color={green} />
+              <Text style={styles.optionText} numberOfLines={1}>
+                {paymentLabel}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionCell} onPress={onOpenNotes} activeOpacity={0.85}>
+              <Ionicons name="chatbubble-ellipses-outline" size={17} color={green} />
+              <Text style={styles.optionText} numberOfLines={1}>
+                {notesPreview}
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-    return {
-      transform: [
-        {
-          translateY: interpolate(
-            progress,
-            [0, 1],
-            [0, BOTTOM_GLIDE_PX],
-            Extrapolation.CLAMP,
-          ),
-        },
-      ],
-      marginTop: interpolate(
-        earlyProgress,
-        [0, 1],
-        [0, 14],
-        Extrapolation.CLAMP,
-      ),
-    };
-  });
+          <TouchableOpacity style={styles.termsRow} onPress={onToggleTerms} activeOpacity={0.85}>
+            <View style={[styles.checkbox, termsAccepted && styles.checkboxChecked]}>
+              {termsAccepted ? <Ionicons name="checkmark" size={14} color="#111" /> : null}
+            </View>
+            <Text style={styles.termsText}>
+              J&apos;accepte les{' '}
+              <Text style={styles.termsLink}>Conditions Générales d&apos;Utilisation</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.commanderBtn, isSubmitting && styles.commanderBtnPending]}
+            onPress={onCommander}
+            disabled={isSubmitting}
+            activeOpacity={0.9}
+          >
+            {isSubmitting ? (
+              <View style={styles.commanderBtnContent}>
+                <ActivityIndicator color="#111" size="small" />
+                <Text style={styles.commanderText}>Recherche d&apos;un chauffeur...</Text>
+              </View>
+            ) : (
+              <Text style={styles.commanderText}>Commander</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </BottomSheetFooter>
+    ),
+    [
+      footerPad,
+      isSubmitting,
+      notesPreview,
+      onBottomBlockLayout,
+      onCommander,
+      onOpenNotes,
+      onOpenOptions,
+      onOpenPassengers,
+      onOpenPayment,
+      onToggleTerms,
+      passengersLabel,
+      paymentLabel,
+      termsAccepted,
+    ],
+  );
 
   if (!visible) return null;
 
@@ -452,22 +532,27 @@ export default function CityVehicleBottomSheet({
         enableOverDrag={false}
         enableDynamicSizing={false}
         handleComponent={renderHandle}
+        footerComponent={renderFooter}
         animationConfigs={SPRING}
         backgroundStyle={styles.sheetBackground}
         style={styles.sheet}
         containerStyle={styles.sheetHost}
       >
         <BottomSheetView style={styles.sheetBody}>
-          <View style={styles.heroWrap} onLayout={(event) => onHeroLayout(event.nativeEvent.layout.height)}>
-            <SelectedHeroRow
-              vehicle={selectedDef}
-              etaMin={heroEta}
-              price={vehiclePrices[selectedDef.id]}
-              driverName={heroDriverName}
-            />
-          </View>
+          <Animated.View style={[styles.topZone, topZoneStyle]}>
+            <View
+              style={styles.heroWrap}
+              onLayout={(event) => onHeroLayout(event.nativeEvent.layout.height)}
+            >
+              <SelectedHeroRow
+                vehicle={selectedDef}
+                etaMin={heroEta}
+                price={vehiclePrices[selectedDef.id]}
+                driverName={heroDriverName}
+              />
+            </View>
 
-          <Animated.View style={listPaneStyle}>
+            <Animated.View style={listPaneStyle}>
             <BottomSheetScrollView
               style={styles.listScroll}
               contentContainerStyle={styles.listContent}
@@ -545,67 +630,7 @@ export default function CityVehicleBottomSheet({
                 </View>
               ) : null}
             </BottomSheetScrollView>
-          </Animated.View>
-
-          <Animated.View
-            style={[
-              styles.bottomBlock,
-              styles.bottomFooter,
-              bottomBlockGlideStyle,
-              { paddingBottom: footerPad },
-            ]}
-            onLayout={(event) => onBottomBlockLayout(event.nativeEvent.layout.height)}
-          >
-            <View style={styles.optionsGrid}>
-              <TouchableOpacity style={styles.optionCell} onPress={onOpenPassengers} activeOpacity={0.85}>
-                <Ionicons name="person-outline" size={17} color={green} />
-                <Text style={styles.optionText} numberOfLines={1}>
-                  {passengersLabel}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.optionCell} onPress={onOpenOptions} activeOpacity={0.85}>
-                <Ionicons name="options-outline" size={17} color={green} />
-                <Text style={styles.optionText}>Options</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.optionCell} onPress={onOpenPayment} activeOpacity={0.85}>
-                <Ionicons name="cash-outline" size={17} color={green} />
-                <Text style={styles.optionText} numberOfLines={1}>
-                  {paymentLabel}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.optionCell} onPress={onOpenNotes} activeOpacity={0.85}>
-                <Ionicons name="chatbubble-ellipses-outline" size={17} color={green} />
-                <Text style={styles.optionText} numberOfLines={1}>
-                  {notesPreview}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity style={styles.termsRow} onPress={onToggleTerms} activeOpacity={0.85}>
-              <View style={[styles.checkbox, termsAccepted && styles.checkboxChecked]}>
-                {termsAccepted ? <Ionicons name="checkmark" size={14} color="#111" /> : null}
-              </View>
-              <Text style={styles.termsText}>
-                J&apos;accepte les{' '}
-                <Text style={styles.termsLink}>Conditions Générales d&apos;Utilisation</Text>
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.commanderBtn, isSubmitting && styles.commanderBtnPending]}
-              onPress={onCommander}
-              disabled={isSubmitting}
-              activeOpacity={0.9}
-            >
-              {isSubmitting ? (
-                <View style={styles.commanderBtnContent}>
-                  <ActivityIndicator color="#111" size="small" />
-                  <Text style={styles.commanderText}>Recherche d&apos;un chauffeur...</Text>
-                </View>
-              ) : (
-                <Text style={styles.commanderText}>Commander</Text>
-              )}
-            </TouchableOpacity>
+            </Animated.View>
           </Animated.View>
         </BottomSheetView>
       </BottomSheet>
@@ -650,12 +675,20 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
+    flexDirection: 'column',
+  },
+  topZone: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'column',
   },
   heroWrap: {
     flexShrink: 0,
   },
-  bottomFooter: {
-    flexShrink: 0,
+  sheetFooter: {
+    backgroundColor: '#101010',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.08)',
   },
   heroRow: {
     minHeight: HERO_ROW_PX,
@@ -707,9 +740,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     gap: 10,
-    backgroundColor: '#101010',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.08)',
   },
   listHeader: {
     flexDirection: 'row',

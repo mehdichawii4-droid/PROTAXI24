@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 
 import { db } from '@/firebaseConfig';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
+import { buildMapCoordinate, isValidMapCoordinate } from '@/utils/rideTracking';
 
 export type CityRideMode = 'Maintenant' | 'Réserver plus tard';
 
@@ -24,6 +25,8 @@ export type CityRideInput = {
   vehicleType?: string;
   estimatedDuration?: number;
   estimatedPrice?: number;
+  pickupLatitude?: number;
+  pickupLongitude?: number;
   partnerId?: string;
   partnerName?: string;
 };
@@ -114,6 +117,16 @@ export async function submitCityRide(
       partnerName: input.partnerName,
     });
 
+    const pickup = buildMapCoordinate(input.pickupLatitude, input.pickupLongitude);
+    const pickupFields = isValidMapCoordinate(pickup)
+      ? {
+          clientLatitude: pickup.latitude,
+          clientLongitude: pickup.longitude,
+          latitude: pickup.latitude,
+          longitude: pickup.longitude,
+        }
+      : {};
+
     const rideDoc = await addDoc(collection(db, 'rides'), {
       clientUid,
       clientName,
@@ -138,6 +151,7 @@ export async function submitCityRide(
       driverCar: '',
       driverId: '',
       createdAt: new Date(),
+      ...pickupFields,
       ...partnerFields,
     });
 

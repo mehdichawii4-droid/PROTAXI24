@@ -39,6 +39,14 @@
         { "fieldPath": "partnerId", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "driversLive",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isOnline", "order": "ASCENDING" },
+        { "fieldPath": "isBusy", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

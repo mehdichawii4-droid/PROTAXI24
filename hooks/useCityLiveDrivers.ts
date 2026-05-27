@@ -1,4 +1,4 @@
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -130,8 +130,14 @@ export function useCityLiveDrivers(options: {
 
     setLoading(true);
 
-    const unsubscribe = onSnapshot(
+    const liveDriversQuery = query(
       collection(db, 'driversLive'),
+      where('isOnline', '==', true),
+      where('isBusy', '==', false),
+    );
+
+    const unsubscribe = onSnapshot(
+      liveDriversQuery,
       (snapshot) => {
         const drivers = snapshot.docs.map(
           (docSnap) =>

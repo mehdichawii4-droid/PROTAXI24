@@ -1096,26 +1096,8 @@ export default function DriversDashboardScreen() {
     latitude: number;
     longitude: number;
   }) => {
-    const logAutoArrive = (reason: string, extra?: Record<string, unknown>) => {
-      console.log('[AUTO ARRIVE DEBUG]', reason, extra ?? {});
-    };
-
-    logAutoArrive('tick', {
-      driverUid,
-      driverPosition: position,
-      inFlightRideId: autoArriveInFlightRef.current,
-    });
-
-    if (!driverUid) {
-      logAutoArrive('return: missing driverUid');
-      return;
-    }
-    if (autoArriveInFlightRef.current) {
-      logAutoArrive('return: auto-arrive already in flight', {
-        rideId: autoArriveInFlightRef.current,
-      });
-      return;
-    }
+    if (!driverUid) return;
+    if (autoArriveInFlightRef.current) return;
 
     const enRouteRide = ridesRef.current.find(
       (ride) =>
@@ -1124,73 +1106,29 @@ export default function DriversDashboardScreen() {
         String(ride.driverId || '').trim() === driverUid,
     );
 
-    if (!enRouteRide?.id) {
-      logAutoArrive('return: no En route ride for driver', {
-        rides: ridesRef.current.map((ride) => ({
-          id: ride?.id,
-          status: normalizeStatus(ride?.status),
-          driverId: String(ride?.driverId || ''),
-        })),
-      });
-      return;
-    }
+    if (!enRouteRide?.id) return;
 
     const rideId = String(enRouteRide.id);
-    const rideStatus = normalizeStatus(enRouteRide.status);
 
-    if (autoArriveHandledRef.current.has(rideId)) {
-      logAutoArrive('return: ride already handled', { rideId, rideStatus });
-      return;
-    }
+    if (autoArriveHandledRef.current.has(rideId)) return;
 
     const pickup = buildMapCoordinate(
       enRouteRide.clientLatitude ?? enRouteRide.latitude,
       enRouteRide.clientLongitude ?? enRouteRide.longitude,
     );
-    const pickupValid = isValidMapCoordinate(pickup);
 
-    logAutoArrive('pickup check', {
-      rideId,
-      rideStatus,
-      clientLatitude: enRouteRide.clientLatitude ?? null,
-      clientLongitude: enRouteRide.clientLongitude ?? null,
-      latitude: enRouteRide.latitude ?? null,
-      longitude: enRouteRide.longitude ?? null,
-      pickup,
-      pickupValid,
-    });
-
-    if (!pickupValid) {
-      logAutoArrive('return: invalid pickup coordinates', { rideId, pickup });
-      return;
-    }
+    if (!isValidMapCoordinate(pickup)) return;
 
     const distanceM = haversineDistanceMeters(position, pickup);
 
-    logAutoArrive('distance check', {
-      rideId,
-      distanceM: Math.round(distanceM),
-      thresholdM: PICKUP_ARRIVAL_RADIUS_M,
-    });
-
-    if (distanceM > PICKUP_ARRIVAL_RADIUS_M) {
-      logAutoArrive('return: distance above threshold', {
-        rideId,
-        distanceM: Math.round(distanceM),
-        thresholdM: PICKUP_ARRIVAL_RADIUS_M,
-      });
-      return;
-    }
+    if (distanceM > PICKUP_ARRIVAL_RADIUS_M) return;
 
     autoArriveHandledRef.current.add(rideId);
     autoArriveInFlightRef.current = rideId;
 
-    logAutoArrive('trigger updateRideStatus Arrivé', { rideId, distanceM: Math.round(distanceM) });
-
     try {
       await updateRideStatus(rideId, 'Arrivé');
       showDriverToast('Arrivée détectée automatiquement');
-      logAutoArrive('success', { rideId });
     } finally {
       if (autoArriveInFlightRef.current === rideId) {
         autoArriveInFlightRef.current = null;

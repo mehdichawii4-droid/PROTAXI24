@@ -4,6 +4,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions/v2';
+import { attemptAutoDispatchForRide } from './autoDispatch';
 
 admin.initializeApp();
 
@@ -671,6 +672,12 @@ export const onRideAssignmentTimeout = onSchedule(
             body: 'Une course attribuée est revenue en attente.',
             eventType: 'taxi_ride_auto_redispatch',
           });
+
+          const freshSnap = await db.doc(`rides/${rideId}`).get();
+          const freshRide = freshSnap.data();
+          if (freshRide) {
+            await attemptAutoDispatchForRide(db, rideId, freshRide);
+          }
         } else if (outcome === 'expired') {
           logger.info('[REDISPATCH AUTO] ride expired after max attempts', {
             rideId,
