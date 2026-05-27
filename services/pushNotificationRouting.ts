@@ -3,10 +3,12 @@ import type { Href, Router } from 'expo-router';
 import { devLog } from '@/utils/devLog';
 
 export const DRIVER_RIDE_ASSIGNED_EVENT = 'taxi_ride_assigned';
+export const RIDE_CHAT_MESSAGE_EVENT = 'taxi_ride_chat_message';
 
 type PushNotificationData = Record<string, unknown>;
 
 let pendingRideId: string | null = null;
+let pendingOpenChat = false;
 
 export function setPendingPushRideId(rideId: string) {
   pendingRideId = rideId.trim() || null;
@@ -18,6 +20,16 @@ export function consumePendingPushRideId(): string | null {
   return rideId;
 }
 
+export function setPendingOpenChat(open: boolean) {
+  pendingOpenChat = open;
+}
+
+export function consumePendingOpenChat(): boolean {
+  const value = pendingOpenChat;
+  pendingOpenChat = false;
+  return value;
+}
+
 export function readPushNotificationData(
   notification: Notifications.Notification,
 ): PushNotificationData {
@@ -26,6 +38,26 @@ export function readPushNotificationData(
     return {};
   }
   return raw as PushNotificationData;
+}
+
+function navigateToRideChat(router: Router, rideId: string, source: 'tap' | 'cold_start') {
+  setPendingPushRideId(rideId);
+  setPendingOpenChat(true);
+
+  devLog('[PUSH] notification tapped — open chat', {
+    source,
+    eventType: RIDE_CHAT_MESSAGE_EVENT,
+    rideId,
+  });
+
+  router.push({
+    pathname: '/course-tracking',
+    params: {
+      id: rideId,
+      rideId,
+      openChat: '1',
+    },
+  } as Href);
 }
 
 export function handleRideAssignedNotificationTap(
@@ -61,6 +93,41 @@ export function handleRideAssignedNotificationTap(
   router.push('/drivers-dashboard' as Href);
 }
 
+export function handleRideChatNotificationTap(
+  router: Router,
+  data: PushNotificationData,
+  source: 'tap' | 'cold_start',
+) {
+  const eventType = String(data.eventType ?? '').trim();
+  if (eventType !== RIDE_CHAT_MESSAGE_EVENT) {
+    return;
+  }
+
+  const rideId = String(data.rideId ?? '').trim();
+  if (!rideId) {
+    return;
+  }
+
+  navigateToRideChat(router, rideId, source);
+}
+
+export function handlePushNotificationTap(
+  router: Router,
+  data: PushNotificationData,
+  source: 'tap' | 'cold_start',
+) {
+  const eventType = String(data.eventType ?? '').trim();
+
+  if (eventType === RIDE_CHAT_MESSAGE_EVENT) {
+    handleRideChatNotificationTap(router, data, source);
+    return;
+  }
+
+  if (eventType === DRIVER_RIDE_ASSIGNED_EVENT) {
+    handleRideAssignedNotificationTap(router, data, source);
+  }
+}
+
 export async function handleColdStartNotificationTap(router: Router) {
   const lastResponse = await Notifications.getLastNotificationResponseAsync();
   if (!lastResponse) {
@@ -68,7 +135,7 @@ export async function handleColdStartNotificationTap(router: Router) {
   }
 
   const data = readPushNotificationData(lastResponse.notification);
-  handleRideAssignedNotificationTap(router, data, 'cold_start');
+  handlePushNotificationTap(router, data, 'cold_start');
 }
 
 export function setupPushNotificationRouting(router: Router): () => void {
@@ -77,7 +144,7 @@ export function setupPushNotificationRouting(router: Router): () => void {
   const responseSubscription = Notifications.addNotificationResponseReceivedListener(
     (response) => {
       const data = readPushNotificationData(response.notification);
-      handleRideAssignedNotificationTap(router, data, 'tap');
+      handlePushNotificationTap(router, data, 'tap');
     },
   );
 
@@ -85,7 +152,10 @@ export function setupPushNotificationRouting(router: Router): () => void {
     (notification) => {
       const data = readPushNotificationData(notification);
       const eventType = String(data.eventType ?? '').trim();
-      if (eventType !== DRIVER_RIDE_ASSIGNED_EVENT) {
+      if (
+        eventType !== DRIVER_RIDE_ASSIGNED_EVENT
+        && eventType !== RIDE_CHAT_MESSAGE_EVENT
+      ) {
         return;
       }
 

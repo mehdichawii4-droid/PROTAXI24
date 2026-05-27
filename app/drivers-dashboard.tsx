@@ -43,7 +43,15 @@ import {
   notifyDriver,
   requestNotificationPermissions,
 } from '@/services/notificationService';
-import { consumePendingPushRideId } from '@/services/pushNotificationRouting';
+import {
+  consumePendingOpenChat,
+  consumePendingPushRideId,
+} from '@/services/pushNotificationRouting';
+import {
+  getUnreadCountForRole,
+  isRideChatOpen,
+  normalizeRideChatUnread,
+} from '@/services/rideChat';
 import {
   buildMapCoordinate,
   haversineDistanceMeters,
@@ -326,7 +334,10 @@ function useLiveEta(status: string, ride: any) {
 }
 
 export default function DriversDashboardScreen() {
-  const { rideId: pushRideIdParam } = useLocalSearchParams<{ rideId?: string }>();
+  const { rideId: pushRideIdParam, openChat: openChatParam } = useLocalSearchParams<{
+    rideId?: string;
+    openChat?: string;
+  }>();
   const { confirmLogout } = useAuthLogout();
   const { user, profile } = useAuth();
   const driverUid = user?.uid ?? getFirebaseAuth().currentUser?.uid ?? '';
@@ -387,6 +398,20 @@ export default function DriversDashboardScreen() {
     setFilter('Attribuée');
     devLog('[PUSH] dashboard focus ride', { rideId });
   }, [pushRideIdParam]);
+
+  useEffect(() => {
+    const wantsChat =
+      String(openChatParam ?? '') === '1' || consumePendingOpenChat();
+    if (!wantsChat) return;
+
+    const targetId = String(pushRideIdParam ?? '').trim();
+    if (!targetId) return;
+
+    const ride = rides.find((item) => item.id === targetId);
+    if (ride && isRideChatOpen(ride.status)) {
+      openRideChat(ride);
+    }
+  }, [openChatParam, pushRideIdParam, rides]);
 
   useEffect(() => {
     if (!driverUid) {
@@ -998,7 +1023,7 @@ export default function DriversDashboardScreen() {
     [rides, todayCompletedRides.length, liveEarnings]
   );
 
-  const openRideTracking = (ride: any) => {
+  const openRideTracking = (ride: any, options?: { openChat?: boolean }) => {
     if (!ride?.id) return;
 
     router.push({
@@ -1015,8 +1040,13 @@ export default function DriversDashboardScreen() {
         airport: ride.destination || '',
         price: ride.price || '',
         time: ride.time || '',
+        ...(options?.openChat ? { openChat: '1' } : {}),
       },
     });
+  };
+
+  const openRideChat = (ride: any) => {
+    openRideTracking(ride, { openChat: true });
   };
 
   const callClient = (phone?: string) => {
@@ -1536,7 +1566,15 @@ export default function DriversDashboardScreen() {
             <Text style={styles.emptyText}>Les courses apparaîtront ici.</Text>
           </View>
         ) : (
-          filteredRides.map((ride) => (
+          filteredRides.map((ride) => {
+            const chatUnread = getUnreadCountForRole(
+              normalizeRideChatUnread(ride.chatUnread),
+              'driver',
+            );
+            const showChatEntry =
+              Boolean(ride.driverId) && isRideChatOpen(normalizeStatus(ride.status));
+
+            return (
             <View
               key={ride.id}
               style={[
@@ -1550,8 +1588,26 @@ export default function DriversDashboardScreen() {
                   <Text style={styles.rideService}>{ride.service || 'Course PROTAXI'}</Text>
                 </View>
 
-                <View style={styles.statusBadge}>
-                  <Text style={styles.statusText}>{normalizeStatus(ride.status)}</Text>
+                <View style={styles.rideTopRight}>
+                  {showChatEntry ? (
+                    <TouchableOpacity
+                      style={styles.chatEntryBtn}
+                      onPress={() => openRideChat(ride)}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="chatbubble-ellipses" size={16} color={gold} />
+                      {chatUnread > 0 ? (
+                        <View style={styles.chatUnreadBadge}>
+                          <Text style={styles.chatUnreadBadgeText}>
+                            {chatUnread > 9 ? '9+' : chatUnread}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </TouchableOpacity>
+                  ) : null}
+                  <View style={styles.statusBadge}>
+                    <Text style={styles.statusText}>{normalizeStatus(ride.status)}</Text>
+                  </View>
                 </View>
               </View>
 
@@ -1572,7 +1628,8 @@ export default function DriversDashboardScreen() {
 
               <View style={styles.actionsRow}>{renderRideActions(ride)}</View>
             </View>
-          ))
+            );
+          })
         )}
 
 
@@ -2829,6 +2886,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  rideTopRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chatEntryBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#151515',
+    borderWidth: 1,
+    borderColor: border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatUnreadBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#FF4B4B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1,
+    borderColor: '#050505',
+  },
+  chatUnreadBadgeText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
   ridePrice: { color: '#FFF', fontSize: 28, fontWeight: '900' },
   rideService: { color: gold, fontSize: 13, fontWeight: '800', marginTop: 4 },

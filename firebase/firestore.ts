@@ -103,6 +103,15 @@ export function getRideDocRef(rideId: string): DocumentReference {
   return doc(getFirestoreDb(), 'rides', normalizedRideId);
 }
 
+export function getRideMessagesCollectionRef(rideId: string): CollectionReference {
+  const normalizedRideId = rideId.trim();
+  if (!normalizedRideId) {
+    throw new Error('rideId is required to access ride messages.');
+  }
+
+  return collection(getRideDocRef(normalizedRideId), 'messages');
+}
+
 export function getDriverLiveDocRef(driverId: string): DocumentReference {
   const normalizedDriverId = driverId.trim();
   if (!normalizedDriverId) {

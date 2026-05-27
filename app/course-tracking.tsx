@@ -26,6 +26,8 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import CourseTrackingMap from '@/components/CourseTrackingMap';
+import RideChatSheet from '@/components/RideChatSheet';
+import { useAuth } from '@/hooks/useAuth';
 import {
   CourseTrackingMapRef,
   DirectionsReadyResult,
@@ -48,6 +50,15 @@ import {
   normalizeRideTrackingStatus,
   resolveRideDestinationCoordinate,
 } from '@/utils/rideTracking';
+import {
+  consumePendingOpenChat,
+} from '@/services/pushNotificationRouting';
+import {
+  getUnreadCountForRole,
+  isRideChatOpen,
+  normalizeRideChatUnread,
+  type RideMessageSenderRole,
+} from '@/services/rideChat';
 import { devError, devLog } from '@/utils/devLog';
 import { db } from '../firebaseConfig';
 
@@ -143,6 +154,8 @@ function PremiumActionButton({
 export default function CourseTrackingScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
+  const { user, role } = useAuth();
+  const viewerUid = String(user?.uid ?? '').trim();
   const rideId = String(params.id || params.rideId || '');
   const hasValidRide = rideId.length > 0;
   const paramDriverId = String(params.driverId || '').trim();
@@ -187,6 +200,7 @@ const [demoMode, setDemoMode] = useState(false);
   const [durationMin, setDurationMin] = useState(0);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [driverAverageRating, setDriverAverageRating] = useState(5);
+  const [chatVisible, setChatVisible] = useState(false);
 
 const arrivedAlertShown = useRef(false);
 const finishedAlertShown = useRef(false);
@@ -205,6 +219,36 @@ const lastRealGpsAtRef = useRef(0);
   const statusTextOpacity = useRef(new Animated.Value(1)).current;
   const statusTextScale = useRef(new Animated.Value(1)).current;
   const statusIconScale = useRef(new Animated.Value(1)).current;
+
+  const chatSenderRole = useMemo((): RideMessageSenderRole => {
+    if (role === 'driver' || (viewerUid && viewerUid === driverId)) {
+      return 'driver';
+    }
+    return 'client';
+  }, [role, viewerUid, driverId]);
+
+  const canUseRideChat = Boolean(driverId) && isRideChatOpen(status);
+
+  const chatUnreadCount = useMemo(() => {
+    const unread = normalizeRideChatUnread(rideData?.chatUnread);
+    return getUnreadCountForRole(unread, chatSenderRole);
+  }, [rideData?.chatUnread, chatSenderRole]);
+
+  const chatPeerLabel = useMemo(() => {
+    if (chatSenderRole === 'driver') {
+      return String(rideData?.client || params.client || 'Client');
+    }
+    return driverName;
+  }, [chatSenderRole, rideData?.client, params.client, driverName]);
+
+  useEffect(() => {
+    const shouldOpen =
+      String(params.openChat ?? '') === '1' || consumePendingOpenChat();
+
+    if (shouldOpen && hasValidRide && canUseRideChat) {
+      setChatVisible(true);
+    }
+  }, [params.openChat, hasValidRide, canUseRideChat, rideId]);
 
   const destinationPosition = useMemo(
     () =>
@@ -1078,6 +1122,35 @@ const openNavigationToClient = () => {
             style={styles.actionBtnWhatsApp}
             textStyle={styles.actionTextPremium}
           />
+          <TouchableOpacity
+            style={[
+              styles.actionBtnChat,
+              !canUseRideChat && styles.actionBtnChatDisabled,
+            ]}
+            onPress={() => {
+              if (!canUseRideChat) {
+                Alert.alert(
+                  'Chat indisponible',
+                  'Le chat s\'ouvre lorsque un chauffeur est attribué à la course.',
+                );
+                return;
+              }
+              setChatVisible(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <View style={styles.chatBtnIconWrap}>
+              <Ionicons name="chatbubble-ellipses" size={18} color="#FFF" />
+              {chatUnreadCount > 0 ? (
+                <View style={styles.chatUnreadDot}>
+                  <Text style={styles.chatUnreadDotText}>
+                    {chatUnreadCount > 9 ? '9+' : chatUnreadCount}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.actionTextPremium}>Messages</Text>
+          </TouchableOpacity>
           <PremiumActionButton
             label="Naviguer"
             icon="navigate"
@@ -1096,6 +1169,18 @@ const openNavigationToClient = () => {
         </View>
       </Animated.View>
       </View>
+
+      {hasValidRide && viewerUid ? (
+        <RideChatSheet
+          visible={chatVisible}
+          onClose={() => setChatVisible(false)}
+          rideId={rideId}
+          senderId={viewerUid}
+          senderRole={chatSenderRole}
+          rideStatus={status}
+          peerLabel={chatPeerLabel}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1569,6 +1654,47 @@ const styles = StyleSheet.create({
     gap: 3,
     borderWidth: 1,
     borderColor: 'rgba(17,17,17,0.25)',
+  },
+
+  actionBtnChat: {
+    flex: 1,
+    height: ACTIONS_ROW_HEIGHT,
+    borderRadius: 14,
+    backgroundColor: 'rgba(22,95,52,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(46,204,113,0.35)',
+  },
+
+  actionBtnChatDisabled: {
+    opacity: 0.5,
+  },
+
+  chatBtnIconWrap: {
+    position: 'relative',
+  },
+
+  chatUnreadDot: {
+    position: 'absolute',
+    top: -7,
+    right: -10,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1,
+    borderColor: '#050505',
+  },
+
+  chatUnreadDotText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '900',
   },
 
   actionBtnQuit: {

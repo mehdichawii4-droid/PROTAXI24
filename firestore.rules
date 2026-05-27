@@ -272,6 +272,61 @@ service cloud.firestore {
         || isClientRideRatingUpdate();
     }
 
+    function rideDocData(rideId) {
+      return get(/databases/$(database)/documents/rides/$(rideId)).data;
+    }
+
+    function isRideChatOpenStatus(status) {
+      return status in ['Attribuée', 'Acceptée', 'En route', 'Arrivé'];
+    }
+
+    function isRideChatParticipantFromRide(ride) {
+      return isAdmin()
+        || isRideOwner(ride)
+        || isAssignedDriver(ride);
+    }
+
+    function isRideChatOpenFromRide(ride) {
+      return isRideChatOpenStatus(ride.status);
+    }
+
+    function isValidRideMessageCreate(rideId) {
+      let ride = rideDocData(rideId);
+      let data = request.resource.data;
+      return isRideChatParticipantFromRide(ride)
+        && isRideChatOpenFromRide(ride)
+        && data.senderId == request.auth.uid
+        && data.senderRole in ['client', 'driver']
+        && (
+          (data.senderRole == 'client' && isRideOwner(ride))
+          || (data.senderRole == 'driver' && isAssignedDriver(ride))
+        )
+        && data.text is string
+        && data.text.size() > 0
+        && data.text.size() <= 1000
+        && data.createdAt == request.time
+        && data.keys().hasOnly(['senderId', 'senderRole', 'text', 'createdAt', 'readBy'])
+        && (!('readBy' in data) || data.readBy == {});
+    }
+
+    function isRideMessageReadByUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy'])
+        && request.resource.data.readBy[request.auth.uid] == request.time
+        && (
+          !('readBy' in resource.data)
+          || request.resource.data.readBy.diff(resource.data.readBy).affectedKeys().hasOnly([request.auth.uid])
+        );
+    }
+
+    function isRideChatMetaUpdate() {
+      return isRideChatParticipantFromRide(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'chatSummary',
+          'chatUnread',
+          'updatedAt',
+        ]);
+    }
+
     function normalizedAuthEmail() {
       return request.auth.token.email != null
         ? request.auth.token.email.lower()
@@ -590,8 +645,20 @@ service cloud.firestore {
       allow read: if isSignedIn() && canReadRide(resource.data);
       allow create: if isClientRideCreate() || isPartnerRideCreate();
 
-      allow update: if isSignedIn() && canUpdateRideStatus();
+      allow update: if isSignedIn() && (canUpdateRideStatus() || isRideChatMetaUpdate());
       allow delete: if isAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && isRideChatParticipantFromRide(rideDocData(rideId));
+
+        allow create: if isSignedIn() && isValidRideMessageCreate(rideId);
+
+        allow update: if isSignedIn()
+          && isRideChatParticipantFromRide(rideDocData(rideId))
+          && isRideMessageReadByUpdate();
+
+        allow delete: if isAdmin();
+      }
     }
 
     // =========================================================================
