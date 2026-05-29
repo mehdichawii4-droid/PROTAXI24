@@ -27,6 +27,8 @@ export type ExperienceV1 = {
   title: string;
   circuitName: string;
   duration: string;
+  /** Badge d'identité — carte étape 2 */
+  identityBadge: string;
   /** Accroche émotionnelle — carte étape 2 */
   hook: string;
   /** Sites / étapes — carte étape 2 (badge + puces) */
@@ -80,19 +82,22 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Hammam Debagh Signature',
     circuitName: 'Hammam Debagh Signature',
     duration: 'Demi-journée',
-    hook: 'Découvrez l’un des sites naturels les plus spectaculaires d’Algérie.',
+    identityBadge: '🔥 Expérience la plus populaire',
+    hook: 'Admirez Guelma depuis El Guelmi, puis vivez la magie de Hammam Debagh.',
     cardInclus: [
+      'Belvédère El Guelmi',
       'Cascade de Hammam Debagh',
       'Cônes calcaires',
       'Sources thermales',
-      'Point panoramique',
+      'Point photo & pause nature',
     ],
-    guideAvailability: 'Guide local disponible',
+    guideAvailability: 'Guide nature & patrimoine disponible',
     highlights: [
+      'Panorama El Guelmi — vue sur Guelma',
       'Cascade de Hammam Debagh',
-      'Cônes calcaires',
-      'Sources thermales',
-      'Points photo',
+      'Cônes calcaires de Debagh',
+      'Sources thermales & vestiges naturels',
+      'Pause bien-être / bain thermal',
     ],
     availableOptions: ['guide', 'photographer', 'traditional_lunch', 'premium_vehicle'],
     bookingMode: 'private',
@@ -102,6 +107,7 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Guelma Romaine',
     circuitName: 'Guelma Romaine',
     duration: 'Demi-journée',
+    identityBadge: '🏛️ Incontournable patrimoine',
     hook: 'Voyagez à travers plus de 2000 ans d’histoire au cœur de l’ancienne cité de Calama.',
     cardInclus: [
       'Théâtre romain',
@@ -128,6 +134,7 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Nature Maouna',
     circuitName: 'Nature Maouna',
     duration: 'Journée',
+    identityBadge: '🌿 Nature & panoramas',
     hook: 'Explorez les hauteurs verdoyantes de Maouna et profitez des plus beaux panoramas de Guelma.',
     cardInclus: [
       'Forêt Ain Safra',
@@ -150,6 +157,7 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Mémoire de Guelma',
     circuitName: 'Mémoire de Guelma',
     duration: 'Demi-journée',
+    identityBadge: '🇩🇿 Mémoire nationale',
     hook: 'Revivez les moments qui ont marqué l’histoire contemporaine de la région.',
     cardInclus: [
       'Musée El Moudjahid',
@@ -173,6 +181,7 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Sur les Traces des Civilisations',
     circuitName: 'Sur les Traces des Civilisations',
     duration: 'Journée',
+    identityBadge: '🏺 Archéologie & civilisations',
     hook: 'Des premiers peuples aux civilisations antiques, découvrez plusieurs millénaires d’histoire.',
     cardInclus: [
       'Thibilis',
@@ -191,16 +200,33 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     title: 'Route Thermale Premium',
     circuitName: 'Route Thermale Premium',
     duration: 'Journée',
-    hook: 'Une journée de détente entre sources thermales, bien-être et patrimoine naturel.',
-    cardInclus: ['Hammam Debagh', 'Hammam Chellala', 'Bouchahrine', 'El Baraka'],
-    guideAvailability: 'Accompagnateur disponible',
-    highlights: [
+    identityBadge: '♨️ Bien-être & thermalisme',
+    hook:
+      'Une journée premium sur le circuit thermal officiel de Guelma : sources, oasis et bien-être de Debagh à El Baraka.',
+    cardInclus: [
       'Hammam Debagh',
       'Hammam Chellala',
       'Bouchahrine',
       'El Baraka',
+      'Piscines naturelles & panoramas',
     ],
-    availableOptions: ['spa_access', 'traditional_lunch', 'guide', 'premium_vehicle'],
+    guideAvailability: 'Accompagnateur thermal disponible',
+    highlights: [
+      'Hammam Debagh — cascade & sources',
+      'Hammam Chellala — station thermale',
+      'Bouchahrine — sources et paysages',
+      'El Baraka — détente & thermalisme',
+      'Piscines naturelles du circuit thermal',
+      'Journée bien-être privée PROTAXI',
+    ],
+    recommendedGuide: 'Accompagnateur thermal recommandé',
+    availableOptions: [
+      'spa_access',
+      'traditional_lunch',
+      'guide',
+      'premium_vehicle',
+      'photographer',
+    ],
     bookingMode: 'private',
   },
 ];
@@ -267,6 +293,9 @@ export function validateExperiencesV1Catalog() {
     }
     if (item.bookingMode !== 'private') {
       errors.push(`${item.id} must be private in V1`);
+    }
+    if (!item.identityBadge.trim()) {
+      errors.push(`${item.id} needs identityBadge`);
     }
     if (!item.hook.trim()) {
       errors.push(`${item.id} needs hook`);

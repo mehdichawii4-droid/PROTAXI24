@@ -47,6 +47,7 @@ import {
   GROUP_FORMULA_LABEL,
   PRIVATE_FORMULA_LABEL,
   type ExperienceOptionId,
+  type ExperienceV1,
 } from '@/constants/experiencesPrivateCatalog';
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import { createTourBooking } from '@/services/createTourBooking';
@@ -102,6 +103,48 @@ function CardCheckBadge() {
   return (
     <View style={styles.cardCheckBadge}>
       <Ionicons name="checkmark" size={14} color="#050505" />
+    </View>
+  );
+}
+
+type IdentityPillVariant = 'gold' | 'goldFeatured' | 'green' | 'neutral';
+
+function getExperienceIdentityPillVariant(experienceId: string): IdentityPillVariant {
+  switch (experienceId) {
+    case 'hammam-debagh-signature':
+      return 'goldFeatured';
+    case 'nature-maouna':
+      return 'green';
+    case 'memoire-de-guelma':
+      return 'neutral';
+    default:
+      return 'gold';
+  }
+}
+
+function ExperienceIdentityPill({ experience }: { experience: ExperienceV1 }) {
+  const variant = getExperienceIdentityPillVariant(experience.id);
+  return (
+    <View
+      style={[
+        styles.skuIdentityPill,
+        variant === 'goldFeatured' && styles.skuIdentityPillGoldFeatured,
+        variant === 'gold' && styles.skuIdentityPillGold,
+        variant === 'green' && styles.skuIdentityPillGreen,
+        variant === 'neutral' && styles.skuIdentityPillNeutral,
+      ]}
+    >
+      <Text
+        style={[
+          styles.skuIdentityText,
+          variant === 'goldFeatured' && styles.skuIdentityTextGold,
+          variant === 'gold' && styles.skuIdentityTextGold,
+          variant === 'green' && styles.skuIdentityTextGreen,
+          variant === 'neutral' && styles.skuIdentityTextNeutral,
+        ]}
+      >
+        {experience.identityBadge}
+      </Text>
     </View>
   );
 }
@@ -492,10 +535,11 @@ export default function ExperiencesPrivateScreen() {
                           />
                           <View style={styles.skuTextCol}>
                             <Text style={styles.skuTitle}>{item.title}</Text>
+                            <ExperienceIdentityPill experience={item} />
                             <Text style={styles.skuHook} numberOfLines={2}>
                               {item.hook}
                             </Text>
-                            <Text style={styles.skuBadge}>
+                            <Text style={styles.skuSiteCount}>
                               {getExperienceSiteBadgeLabel(item)}
                             </Text>
                             <Text style={styles.skuInclusLabel}>
@@ -839,8 +883,36 @@ const styles = StyleSheet.create({
   skuThumb: { width: 64, height: 64, borderRadius: 12 },
   skuTextCol: { flex: 1, gap: 2 },
   skuTitle: { color: '#FFF', fontSize: 15, fontWeight: '700' },
-  skuHook: { color: '#E8E8E8', fontSize: 12, lineHeight: 17, marginTop: 2 },
-  skuBadge: { color: green, fontSize: 11, fontWeight: '700', marginTop: 4 },
+  skuIdentityPill: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  skuIdentityPillGold: {
+    backgroundColor: 'rgba(212,160,23,0.15)',
+    borderColor: 'rgba(212,160,23,0.35)',
+  },
+  skuIdentityPillGoldFeatured: {
+    backgroundColor: 'rgba(212,160,23,0.2)',
+    borderColor: 'rgba(212,160,23,0.55)',
+  },
+  skuIdentityPillGreen: {
+    backgroundColor: 'rgba(139,197,63,0.12)',
+    borderColor: 'rgba(139,197,63,0.35)',
+  },
+  skuIdentityPillNeutral: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  skuIdentityText: { fontSize: 10, fontWeight: '800' },
+  skuIdentityTextGold: { color: gold },
+  skuIdentityTextGreen: { color: green },
+  skuIdentityTextNeutral: { color: '#E8E8E8' },
+  skuHook: { color: '#E8E8E8', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  skuSiteCount: { color: green, fontSize: 11, fontWeight: '700', marginTop: 4 },
   skuInclusLabel: {
     color: muted,
     fontSize: 10,
