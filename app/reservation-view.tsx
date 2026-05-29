@@ -4,45 +4,204 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { doc, getDoc } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Linking,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  formatPrivateDriverDuration,
+  getPrivateDriverTypeLabel,
+} from '@/services/privateDriverRideService';
+import {
+  canClientCancelReservation,
+  canClientOpenCourseTracking,
+  getClientReservationStatusLabel,
+  isScheduledAirportRide,
+  isScheduledManagedRide,
+  isScheduledPrivateDriverRide,
+  normalizeRideStatus,
+  shouldShowAssignedDriverToClient,
+} from '@/types/driver';
 import { db } from '../firebaseConfig';
 
-const gold = '#D4A017';
-const green = '#2ECC71';
-const red = '#FF4B4B';
-const blue = '#008CFF';
-const purple = '#9B59B6';
+const brandGreen = '#8BC53F';
+const gold = '#C9A227';
+const red = '#E85D5D';
+const muted = '#8A8A8A';
+const borderIdle = 'rgba(255,255,255,0.09)';
 
 const phoneDisplay = '+213 671 421 448';
 const phoneLink = '+213671421448';
 
+const TIMELINE_STEPS = [
+  'Transfert confirmé',
+  'Préparation',
+  'Chauffeur confirmé',
+  'En route',
+  'Terminée',
+] as const;
+
+function getTimelineActiveIndex(status: string, isScheduledManaged: boolean): number {
+  const normalized = normalizeRideStatus(status);
+
+  if (normalized === 'Terminée') return 4;
+  if (normalized === 'En route' || normalized === 'Arrivé') return 3;
+
+  if (isScheduledManaged) {
+    if (normalized === 'Chauffeur confirmé') return 2;
+    if (normalized === 'À attribuer' || normalized === 'En attente confirmation chauffeur') {
+      return 1;
+    }
+    if (normalized === 'Confirmée') return 0;
+    return 0;
+  }
+
+  if (normalized === 'Acceptée') return 2;
+  if (normalized === 'Attribuée') return 1;
+  return 0;
+}
+
+function getStatusTone(
+  status: string,
+  isScheduledManaged: boolean,
+): 'success' | 'waiting' | 'danger' | 'neutral' {
+  const normalized = normalizeRideStatus(status);
+
+  if (normalized === 'Annulée') return 'danger';
+  if (normalized === 'Terminée' || normalized === 'En route' || normalized === 'Arrivé') {
+    return 'success';
+  }
+  if (normalized === 'Acceptée' || normalized === 'Chauffeur confirmé' || normalized === 'Confirmée') {
+    return 'success';
+  }
+  if (
+    normalized === 'Attribuée'
+    || normalized === 'À attribuer'
+    || normalized === 'En attente confirmation chauffeur'
+  ) {
+    return 'waiting';
+  }
+  if (!isScheduledManaged && normalized === 'En attente') return 'waiting';
+  return 'neutral';
+}
+
+function getPrivateDriverModeLabel(mode: unknown): string | null {
+  const value = String(mode || '').trim();
+  if (value === 'trajet' || value === 'disposition') {
+    return getPrivateDriverTypeLabel(value as 'trajet' | 'disposition');
+  }
+  return null;
+}
+
+function getStatusHint(
+  status: string,
+  isScheduledManaged: boolean,
+  isScheduledPrivate: boolean,
+): string {
+  const normalized = normalizeRideStatus(status);
+
+  if (normalized === 'Annulée') return 'Cette réservation a été annulée.';
+  if (normalized === 'Terminée') return 'Merci d’avoir voyagé avec PROTAXI.';
+  if (normalized === 'Arrivé') return 'Votre chauffeur est sur place.';
+  if (normalized === 'En route') return 'Suivez votre chauffeur en temps réel.';
+
+  if (isScheduledManaged) {
+    if (normalized === 'Confirmée') {
+      return isScheduledPrivate
+        ? 'Notre équipe prépare votre mise à disposition chauffeur.'
+        : 'Notre équipe vérifie votre vol avant le jour du trajet.';
+    }
+    if (normalized === 'À attribuer' || normalized === 'En attente confirmation chauffeur') {
+      return isScheduledPrivate
+        ? 'PROTAXI prépare votre chauffeur privé.'
+        : 'PROTAXI prépare votre transfert.';
+    }
+    if (normalized === 'Chauffeur confirmé') {
+      return 'Votre chauffeur est confirmé pour la date prévue.';
+    }
+  }
+
+  if (normalized === 'Acceptée') return 'Votre chauffeur a confirmé la course.';
+  if (normalized === 'Attribuée') return 'Un chauffeur a été attribué à votre course.';
+  return 'Votre demande est en cours de traitement.';
+}
+
+function getTransferDirectionLabel(mode: unknown): string | null {
+  const value = String(mode || '').trim();
+  if (value === 'deposer') return 'Aller à l’aéroport';
+  if (value === 'recuperer') return 'Depuis l’aéroport';
+  return null;
+}
+
 export default function ReservationViewScreen() {
   const params = useLocalSearchParams();
 
-  const [status, setStatus] = useState(
-    String(params.status || 'En attente')
-  );
+  const [status, setStatus] = useState(String(params.status || 'En attente'));
+
+  const rideContext = {
+    rideType: params.rideType,
+    rideMode: params.rideMode,
+  };
+  const isScheduledAirport = isScheduledAirportRide(rideContext);
+  const isScheduledPrivate = isScheduledPrivateDriverRide(rideContext);
+  const isScheduledManaged = isScheduledManagedRide(rideContext);
+  const normalizedStatus = normalizeRideStatus(status);
+  const statusLabel = getClientReservationStatusLabel(status, rideContext);
+  const statusTone = getStatusTone(status, isScheduledManaged);
+  const statusHint = getStatusHint(status, isScheduledManaged, isScheduledPrivate);
+  const timelineActiveIndex = getTimelineActiveIndex(status, isScheduledManaged);
 
   const reservationId = String(params.id || Date.now()).slice(-6);
+  const modePill = isScheduledManaged ? 'Planifié' : 'Maintenant';
+  const headerTitle = isScheduledPrivate
+    ? 'Votre chauffeur privé'
+    : isScheduledAirport
+      ? 'Votre transfert'
+      : 'Votre réservation';
 
-  const priceNumber = parseInt(
-    String(params.price || '0').replace(/\D/g, ''),
-    10
-  );
-
+  const priceNumber = parseInt(String(params.price || '0').replace(/\D/g, ''), 10);
   const finalPrice = isNaN(priceNumber) ? 0 : priceNumber;
   const driverId = String(params.driverId || params.ratedDriverId || '').trim();
   const [driverAverageRating, setDriverAverageRating] = useState(5);
+
+  const isRoundTrip =
+    params.tripType === 'retour'
+    || params.tripType === 'aller-retour'
+    || params.tripType === 'round-trip';
+
+  const airportLabel = String(params.airport || params.destination || '—');
+  const addressLabel = String(params.address || params.departure || 'Non renseignée');
+  const dateLabel = String(params.date || '—');
+  const timeLabel = String(params.time || '—');
+  const whenLabel = useMemo(() => {
+    if (dateLabel === '—' && timeLabel === '—') return '—';
+    if (dateLabel !== '—' && timeLabel !== '—') return `${dateLabel} · ${timeLabel}`;
+    return dateLabel !== '—' ? dateLabel : timeLabel;
+  }, [dateLabel, timeLabel]);
+
+  const directionLabel = getTransferDirectionLabel(params.mode ?? params.transferMode);
+  const privateDriverModeLabel = getPrivateDriverModeLabel(
+    params.privateDriverType ?? params.mode,
+  );
+  const durationLabel = formatPrivateDriverDuration(
+    String(params.durationHours || ''),
+  );
+  const passengersLabel = `${String(params.passengers || '1')} passager${Number(params.passengers || 1) > 1 ? 's' : ''}`;
+  const bagsLabel = `${String(params.bags || '0')} bagage${Number(params.bags || 0) > 1 ? 's' : ''}`;
+
+  const flightNumber = String(params.flightNumber || '').trim();
+  const terminal = String(params.terminal || '').trim();
+  const airline = String(params.airline || '').trim();
+  const hasFlightBlock = Boolean(flightNumber || terminal || airline);
+  const hasOptions =
+    String(params.meetAndGreet || '') === 'true' || Boolean(String(params.notes || '').trim());
 
   useEffect(() => {
     if (!driverId) return;
@@ -56,41 +215,6 @@ export default function ReservationViewScreen() {
       }
     });
   }, [driverId]);
-
-  const isRoundTrip =
-    params.tripType === 'retour' ||
-    params.tripType === 'aller-retour' ||
-    params.tripType === 'round-trip';
-
-  const getStatusColor = () => {
-    if (status === 'Annulée') return red;
-    if (status === 'Terminée') return green;
-    if (status === 'Arrivé') return purple;
-    if (status === 'En route') return blue;
-    if (status === 'Acceptée') return green;
-    if (status === 'Attribuée') return gold;
-    return gold;
-  };
-
-  const getStatusIcon = () => {
-    if (status === 'Annulée') return 'close-circle';
-    if (status === 'Terminée') return 'checkmark-done-circle';
-    if (status === 'Arrivé') return 'location';
-    if (status === 'En route') return 'car-sport';
-    if (status === 'Acceptée') return 'shield-checkmark';
-    if (status === 'Attribuée') return 'person';
-    return 'time';
-  };
-
-  const getStatusMessage = () => {
-    if (status === 'Annulée') return 'Cette réservation a été annulée.';
-    if (status === 'Terminée') return 'Cette course est terminée.';
-    if (status === 'Arrivé') return 'Votre chauffeur est arrivé.';
-    if (status === 'En route') return 'Votre chauffeur est en route.';
-    if (status === 'Acceptée') return 'Votre chauffeur a accepté la course.';
-    if (status === 'Attribuée') return 'Un chauffeur a été attribué à votre course.';
-    return 'Votre demande est en attente de confirmation.';
-  };
 
   const addNotification = async (newStatus: string) => {
     const notifData = await AsyncStorage.getItem('notifications');
@@ -107,40 +231,29 @@ export default function ReservationViewScreen() {
   };
 
   const cancelReservation = () => {
-    if (status !== 'En attente' && status !== 'Attribuée') {
+    if (!canClientCancelReservation(status, rideContext)) {
       Alert.alert(
         'Annulation impossible',
-        'Cette réservation est déjà prise en charge. Contactez PROTAXI24 pour toute modification.'
+        'Cette réservation est déjà prise en charge. Contactez PROTAXI pour toute modification.',
       );
       return;
     }
 
-    Alert.alert(
-      'Annuler la réservation',
-      'Voulez-vous vraiment annuler cette réservation ?',
-      [
-        { text: 'Non', style: 'cancel' },
-        {
-          text: 'Oui, annuler',
-          style: 'destructive',
-          onPress: async () => {
-            await addNotification('Annulée');
-
-            await Haptics.notificationAsync(
-              Haptics.NotificationFeedbackType.Warning
-            );
-
-            setStatus('Annulée');
-
-            Alert.alert(
-              'Réservation annulée',
-              'Votre réservation a été annulée.',
-              [{ text: 'OK', onPress: () => router.back() }]
-            );
-          },
+    Alert.alert('Annuler la réservation', 'Voulez-vous vraiment annuler cette réservation ?', [
+      { text: 'Non', style: 'cancel' },
+      {
+        text: 'Oui, annuler',
+        style: 'destructive',
+        onPress: async () => {
+          await addNotification('Annulée');
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          setStatus('Annulée');
+          Alert.alert('Réservation annulée', 'Votre réservation a été annulée.', [
+            { text: 'OK', onPress: () => router.back() },
+          ]);
         },
-      ]
-    );
+      },
+    ]);
   };
 
   const callTaxi = () => {
@@ -149,23 +262,26 @@ export default function ReservationViewScreen() {
 
   const openWhatsApp = () => {
     const message = encodeURIComponent(
-      `Bonjour PROTAXI24, je vous contacte concernant ma réservation #${reservationId}.
+      `Bonjour PROTAXI, réservation #${reservationId}.
 
 Service : ${String(params.service || 'Transfert aéroport')}
-Aéroport : ${String(params.airport || params.destination || '-')}
-Adresse : ${String(params.address || params.departure || '-')}
-Date : ${String(params.date || '-')}
-Heure : ${String(params.time || '-')}
+Aéroport : ${airportLabel}
+Adresse : ${addressLabel}
+Date : ${dateLabel}
+Heure : ${timeLabel}
 Passagers : ${String(params.passengers || '1')}
-Bagages : ${String(params.bags || '0')}
-Trajet : ${isRoundTrip ? 'Aller-retour' : 'Aller simple'}
-Prix : ${finalPrice.toLocaleString('fr-FR')} DZD
-Statut : ${status}`
+Statut : ${statusLabel}`,
     );
 
-    Linking.openURL(
-      `https://wa.me/${phoneLink.replace('+', '')}?text=${message}`
-    );
+    Linking.openURL(`https://wa.me/${phoneLink.replace('+', '')}?text=${message}`);
+  };
+
+  const openHelp = () => {
+    Alert.alert('Besoin d’aide ?', 'Choisissez comment contacter PROTAXI.', [
+      { text: 'Appeler', onPress: callTaxi },
+      { text: 'WhatsApp', onPress: openWhatsApp },
+      { text: 'Fermer', style: 'cancel' },
+    ]);
   };
 
   const goTracking = async () => {
@@ -177,288 +293,253 @@ Statut : ${status}`
         id: String(params.id || ''),
         rideId: String(params.id || ''),
         driverId: String(params.driverId || ''),
-        address: String(params.address || params.departure || ''),
-        airport: String(params.airport || params.destination || ''),
-        time: String(params.time || ''),
+        address: addressLabel,
+        airport: airportLabel,
+        time: timeLabel,
         price: String(params.price || finalPrice || '0'),
         status,
       },
     });
   };
 
-  const statusColor = getStatusColor();
-  const statusIcon = getStatusIcon();
+  const canCancel = canClientCancelReservation(status, rideContext);
+  const canTrack = canClientOpenCourseTracking(status, rideContext);
+  const showDriverDetails =
+    shouldShowAssignedDriverToClient(status, rideContext)
+    && String(params.driverName || '').trim().length > 0;
+  const driverDisplayName = String(params.driverName || '').trim();
+  const driverDisplayCar = String(params.driverCar || '').trim();
 
-  const canCancel = status === 'En attente' || status === 'Attribuée';
-  const canTrack = status !== 'Annulée' && status !== 'Terminée';
+  const toneColor =
+    statusTone === 'danger' ? red : statusTone === 'waiting' ? gold : brandGreen;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <StatusBar style="light" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scroll}
       >
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backBtn}
-          >
-            <Ionicons name="arrow-back" size={30} color="#FFF" />
+        <View style={styles.navRow}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={18} color="#fff" />
           </TouchableOpacity>
-
-          <Text style={styles.headerTitle}>Détails réservation</Text>
-
           <View style={styles.backBtn} />
         </View>
 
-        <View style={[styles.statusBox, { borderColor: statusColor }]}>
-          <Ionicons name={statusIcon as any} size={26} color={statusColor} />
+        <View style={styles.headerBlock}>
+          <Text style={styles.headerTitle}>{headerTitle}</Text>
+          <View style={styles.headerAccentLine} />
+        </View>
 
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.statusText, { color: statusColor }]}>
-              {status}
-            </Text>
-
-            <Text style={styles.statusMini}>
-              Réservation #{reservationId}
-            </Text>
+        <View style={styles.statusCard}>
+          <View style={styles.statusTopRow}>
+            <View style={[styles.statusDot, { backgroundColor: toneColor }]} />
+            <Text style={styles.statusLabel}>{statusLabel}</Text>
+          </View>
+          <Text style={styles.statusHint}>{statusHint}</Text>
+          <View style={styles.statusMetaRow}>
+            <Text style={styles.statusMeta}>#{reservationId}</Text>
+            <View style={styles.modePill}>
+              <Text style={styles.modePillText}>{modePill}</Text>
+            </View>
           </View>
         </View>
 
-        <Text style={styles.statusSub}>{getStatusMessage()}</Text>
-
-        <View style={styles.timelineBox}>
-          <TimelineStep active done icon="search" title="En attente" text="Demande envoyée" />
-          <TimelineStep active={['Attribuée', 'Acceptée', 'En route', 'Arrivé', 'Terminée'].includes(status)} done={['Acceptée', 'En route', 'Arrivé', 'Terminée'].includes(status)} icon="person" title="Attribuée" text="Chauffeur attribué" />
-          <TimelineStep active={['Acceptée', 'En route', 'Arrivé', 'Terminée'].includes(status)} done={['En route', 'Arrivé', 'Terminée'].includes(status)} icon="shield-checkmark" title="Acceptée" text="Course acceptée" />
-          <TimelineStep active={['En route', 'Arrivé', 'Terminée'].includes(status)} done={['Arrivé', 'Terminée'].includes(status)} icon="car-sport" title="En route" text="Le chauffeur arrive" />
-          <TimelineStep active={['Arrivé', 'Terminée'].includes(status)} done={status === 'Terminée'} icon="location" title="Arrivé" text="Chauffeur sur place" />
-          <TimelineStep active={status === 'Terminée'} done={status === 'Terminée'} icon="checkmark-done-circle" title="Terminée" text="Course finalisée" last />
-        </View>
-
-        <View style={styles.driverBox}>
-          <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={36} color="#111" />
+        {normalizedStatus !== 'Annulée' ? (
+          <View style={styles.timelineCard}>
+            {TIMELINE_STEPS.map((title, index) => (
+              <TimelineStep
+                key={title}
+                title={title}
+                last={index === TIMELINE_STEPS.length - 1}
+                done={timelineActiveIndex > index || normalizedStatus === 'Terminée'}
+                active={timelineActiveIndex === index && normalizedStatus !== 'Terminée'}
+              />
+            ))}
           </View>
+        ) : null}
 
-          <View style={{ flex: 1 }}>
-            <Text style={styles.driverName}>
-              {String(params.driverName || 'Taxi Mehdi 24')}
-            </Text>
-            <Text style={styles.driverSub}>Chauffeur professionnel</Text>
-            <Text style={styles.driverCar}>
-              {String(params.driverCar || 'Renault Clio • Berline')}
-            </Text>
+        {showDriverDetails ? (
+          <View style={styles.driverCard}>
+            <View style={styles.driverAvatar}>
+              <Text style={styles.driverInitial}>
+                {driverDisplayName.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.driverInfo}>
+              <Text style={styles.driverName}>{driverDisplayName}</Text>
+              {driverDisplayCar ? (
+                <Text style={styles.driverCar}>{driverDisplayCar}</Text>
+              ) : null}
+            </View>
+            <View style={styles.ratingPill}>
+              <Ionicons name="star" size={12} color={gold} />
+              <Text style={styles.ratingText}>{driverAverageRating.toFixed(1)}</Text>
+            </View>
           </View>
+        ) : null}
 
-          <View style={styles.ratingBox}>
-            <Ionicons name="star" size={15} color={gold} />
-            <Text style={styles.ratingText}>{driverAverageRating.toFixed(1)}</Text>
-          </View>
-        </View>
+        <View style={styles.tripCard}>
+          <Text style={styles.tripCardTitle}>
+            {isScheduledPrivate ? 'Votre demande' : 'Votre trajet'}
+          </Text>
 
-        <View style={styles.card}>
-          <InfoRow
-            icon="airplane"
-            label="Destination"
-            value={String(params.airport || params.destination || '-')}
+          {isScheduledPrivate && privateDriverModeLabel ? (
+            <TripRow label="Service" value={privateDriverModeLabel} />
+          ) : null}
+          {!isScheduledPrivate ? (
+            <TripRow label="Aéroport" value={airportLabel} />
+          ) : null}
+          {!isScheduledPrivate && directionLabel ? (
+            <TripRow label="Sens" value={directionLabel} />
+          ) : null}
+          <TripRow
+            label={isScheduledPrivate ? 'Départ' : 'Adresse'}
+            value={String(params.departure || addressLabel)}
           />
-
-          <InfoRow
-            icon="location"
-            label="Adresse"
-            value={String(params.address || params.departure || 'Non renseignée')}
-          />
-
-          <InfoRow
-            icon="calendar"
-            label="Date"
-            value={String(params.date || '-')}
-          />
-
-          <InfoRow
-            icon="time"
-            label="Heure"
-            value={String(params.time || '-')}
-          />
-
-          <InfoRow
-            icon="people"
-            label="Passagers"
-            value={`${String(params.passengers || '1')} passagers`}
-          />
-
-          <InfoRow
-            icon="briefcase"
-            label="Bagages"
-            value={`${String(params.bags || '0')} bagages`}
-          />
-
-          <InfoRow
-            icon="repeat"
-            label="Trajet"
-            value={isRoundTrip ? 'Aller-retour' : 'Aller simple'}
-          />
-
-          <InfoRow
-            icon="car-sport"
-            label="Véhicule"
-            value={String(params.driverCar || 'Berline')}
-          />
-
-          <InfoRow
-            icon="cash"
-            label="Prix total"
-            value={`${finalPrice.toLocaleString('fr-FR')} DZD`}
-            goldValue
-          />
-        </View>
-
-        <View style={styles.infoBox}>
-          <View style={styles.infoHeader}>
-            <Ionicons
-              name="information-circle-outline"
-              size={26}
-              color={gold}
+          {isScheduledPrivate || String(params.destination || '').trim() ? (
+            <TripRow
+              label="Destination"
+              value={String(params.destination || airportLabel)}
             />
+          ) : null}
+          {isScheduledPrivate && String(params.durationHours || '').trim() ? (
+            <TripRow label="Durée" value={durationLabel} />
+          ) : null}
 
-            <Text style={styles.infoTitle}>
-              Informations importantes
-            </Text>
+          <View style={styles.divider} />
+
+          <View style={styles.whenRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.tripLabel}>Quand</Text>
+              <Text style={styles.tripValue}>{whenLabel}</Text>
+            </View>
+            <View style={styles.modePill}>
+              <Text style={styles.modePillText}>{modePill}</Text>
+            </View>
           </View>
 
-          <Text style={styles.infoText}>
-            • PROTAXI24 vous contactera pour confirmer la disponibilité.
-          </Text>
+          {hasFlightBlock ? (
+            <>
+              <View style={styles.divider} />
+              {flightNumber ? <TripRow label="Vol" value={flightNumber} /> : null}
+              {terminal ? <TripRow label="Terminal" value={terminal} /> : null}
+              {airline ? <TripRow label="Compagnie" value={airline} /> : null}
+            </>
+          ) : null}
 
-          <Text style={styles.infoText}>
-            • Veuillez être prêt 10 minutes avant l’heure prévue.
-          </Text>
+          <View style={styles.divider} />
 
-          <Text style={styles.infoText}>
-            • Pour modifier une réservation confirmée, contactez-nous.
-          </Text>
+          <TripRow label="Voyageurs" value={`${passengersLabel} · ${bagsLabel}`} />
+
+          {!isScheduledManaged ? (
+            <TripRow label="Type" value={isRoundTrip ? 'Aller-retour' : 'Aller simple'} />
+          ) : null}
+
+          {hasOptions ? (
+            <>
+              <View style={styles.divider} />
+              {String(params.meetAndGreet || '') === 'true' ? (
+                <TripRow label="Accueil" value="Pancarte à l’arrivée" />
+              ) : null}
+              {String(params.notes || '').trim() ? (
+                <TripRow label="Options" value={String(params.notes)} />
+              ) : null}
+            </>
+          ) : null}
+
+          <View style={styles.divider} />
+          <View style={styles.priceRow}>
+            <Text style={styles.priceLabel}>Tarif indicatif</Text>
+            <Text style={styles.priceValue}>
+              {finalPrice > 0
+                ? `${finalPrice.toLocaleString('fr-FR')} DZD`
+                : String(params.price || '—')}
+            </Text>
+          </View>
         </View>
 
-        {canTrack && (
+        {canTrack ? (
           <TouchableOpacity
-            style={styles.trackBtn}
+            style={styles.primaryBtn}
             activeOpacity={0.9}
             onPress={goTracking}
           >
-            <Ionicons name="navigate" size={27} color="#111" />
-
-            <View style={styles.actionTextBox}>
-              <Text style={styles.trackTitle}>Suivre la course</Text>
-              <Text style={styles.trackSub}>
-                Voir le chauffeur sur la carte
-              </Text>
-            </View>
-
-            <Ionicons name="chevron-forward" size={24} color="#111" />
+            <Ionicons name="navigate" size={20} color="#111" />
+            <Text style={styles.primaryBtnText}>Suivre la course</Text>
           </TouchableOpacity>
-        )}
+        ) : null}
 
-        <TouchableOpacity
-          style={styles.callBtn}
-          activeOpacity={0.85}
-          onPress={callTaxi}
-        >
-          <Ionicons name="call" size={28} color={gold} />
-
-          <View style={styles.actionTextBox}>
-            <Text style={styles.actionTitle}>Appeler PROTAXI24</Text>
-            <Text style={styles.actionSub}>{phoneDisplay}</Text>
+        <View style={styles.contactRow}>
+          <Text style={styles.contactLabel}>Besoin d’aide ?</Text>
+          <View style={styles.contactActions}>
+            <TouchableOpacity style={styles.contactBtn} onPress={openHelp} activeOpacity={0.85}>
+              <Ionicons name="help-circle-outline" size={20} color={muted} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.contactBtn} onPress={callTaxi} activeOpacity={0.85}>
+              <Ionicons name="call-outline" size={20} color={gold} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.contactBtn} onPress={openWhatsApp} activeOpacity={0.85}>
+              <Ionicons name="logo-whatsapp" size={20} color={brandGreen} />
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
+        <Text style={styles.contactPhone}>{phoneDisplay}</Text>
 
-        <TouchableOpacity
-          style={styles.whatsappBtn}
-          activeOpacity={0.85}
-          onPress={openWhatsApp}
-        >
-          <Ionicons name="logo-whatsapp" size={30} color={green} />
-
-          <View style={styles.actionTextBox}>
-            <Text style={styles.actionTitle}>WhatsApp</Text>
-            <Text style={styles.actionSub}>
-              Envoyer les détails de la réservation
-            </Text>
-          </View>
-        </TouchableOpacity>
-
-        {canCancel && (
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            activeOpacity={0.85}
-            onPress={cancelReservation}
-          >
-            <Ionicons name="trash" size={28} color={red} />
-            <Text style={styles.cancelText}>Annuler la réservation</Text>
+        {canCancel ? (
+          <TouchableOpacity style={styles.cancelLink} onPress={cancelReservation} activeOpacity={0.85}>
+            <Text style={styles.cancelLinkText}>Annuler la réservation</Text>
           </TouchableOpacity>
-        )}
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 function TimelineStep({
-  active,
-  done,
-  icon,
   title,
-  text,
+  done,
+  active,
   last,
-}: any) {
+}: {
+  title: string;
+  done?: boolean;
+  active?: boolean;
+  last?: boolean;
+}) {
   return (
     <View style={styles.timelineRow}>
-      <View style={styles.timelineLeft}>
+      <View style={styles.timelineRail}>
         <View
           style={[
-            styles.timelineCircle,
-            active && styles.timelineCircleActive,
-            done && styles.timelineCircleDone,
+            styles.timelineDot,
+            done && styles.timelineDotDone,
+            active && styles.timelineDotActive,
           ]}
-        >
-          <Ionicons
-            name={icon}
-            size={15}
-            color={active ? '#111' : '#777'}
-          />
-        </View>
-
-        {!last && <View style={styles.timelineLine} />}
+        />
+        {!last ? (
+          <View style={[styles.timelineLine, done && styles.timelineLineDone]} />
+        ) : null}
       </View>
-
-      <View style={styles.timelineContent}>
-        <Text
-          style={[
-            styles.timelineTitle,
-            active && styles.timelineTitleActive,
-          ]}
-        >
-          {title}
-        </Text>
-
-        <Text style={styles.timelineText}>{text}</Text>
-      </View>
+      <Text
+        style={[
+          styles.timelineTitle,
+          (done || active) && styles.timelineTitleEmphasis,
+        ]}
+      >
+        {title}
+      </Text>
     </View>
   );
 }
 
-function InfoRow({ icon, label, value, goldValue }: any) {
+function TripRow({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.row}>
-      <Ionicons name={icon} size={27} color={gold} />
-
-      <Text style={styles.label}>{label}</Text>
-
-      <Text
-        style={[styles.value, goldValue && styles.valueGold]}
-        numberOfLines={2}
-      >
+    <View style={styles.tripRow}>
+      <Text style={styles.tripLabel}>{label}</Text>
+      <Text style={styles.tripValue} numberOfLines={3}>
         {value}
       </Text>
     </View>
@@ -472,284 +553,315 @@ const styles = StyleSheet.create({
   },
   scroll: {
     paddingHorizontal: 16,
-    paddingBottom: 42,
+    paddingBottom: 40,
   },
-  header: {
-    paddingTop: 18,
-    marginBottom: 22,
+  navRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingTop: 4,
+    marginBottom: 8,
   },
   backBtn: {
-    width: 36,
-    height: 36,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: borderIdle,
+  },
+  headerBlock: {
+    alignItems: 'center',
+    marginBottom: 18,
+    gap: 6,
   },
   headerTitle: {
-    color: '#FFF',
-    fontSize: 23,
-    fontWeight: '900',
-    flex: 1,
-    textAlign: 'center',
+    color: '#F2F2F2',
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
-  statusBox: {
-    borderWidth: 1,
-    borderRadius: 24,
-    paddingVertical: 15,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  statusText: {
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  statusMini: {
-    color: '#AAA',
-    fontSize: 13,
-    fontWeight: '800',
-    marginTop: 3,
-  },
-  statusSub: {
-    color: '#BDBDBD',
-    fontSize: 15,
-    textAlign: 'center',
-    marginTop: 14,
-    marginBottom: 16,
-    lineHeight: 22,
-  },
-  timelineBox: {
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 24,
-    padding: 18,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.18)',
-  },
-  timelineRow: {
-    flexDirection: 'row',
-    minHeight: 55,
-  },
-  timelineLeft: {
-    width: 34,
-    alignItems: 'center',
-  },
-  timelineCircle: {
-    width: 29,
-    height: 29,
-    borderRadius: 15,
-    backgroundColor: '#222',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timelineCircleActive: {
+  headerAccentLine: {
+    width: 28,
+    height: 1,
+    borderRadius: 1,
     backgroundColor: gold,
+    opacity: 0.55,
   },
-  timelineCircleDone: {
-    backgroundColor: green,
-  },
-  timelineLine: {
-    flex: 1,
-    width: 2,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    marginTop: 4,
-  },
-  timelineContent: {
-    flex: 1,
-    paddingLeft: 10,
-  },
-  timelineTitle: {
-    color: '#888',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  timelineTitleActive: {
-    color: '#FFF',
-  },
-  timelineText: {
-    color: '#AAA',
-    fontSize: 13,
-    marginTop: 3,
-  },
-  driverBox: {
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 24,
+  statusCard: {
+    backgroundColor: 'rgba(28,28,28,0.72)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: borderIdle,
     padding: 16,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 13,
+    marginBottom: 16,
+    gap: 8,
   },
-  driverAvatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: gold,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  driverName: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  driverSub: {
-    color: '#AAA',
-    fontSize: 13,
-    marginTop: 3,
-  },
-  driverCar: {
-    color: gold,
-    fontSize: 13,
-    fontWeight: '800',
-    marginTop: 5,
-  },
-  ratingBox: {
-    borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.4)',
-    borderRadius: 14,
-    paddingVertical: 6,
-    paddingHorizontal: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  ratingText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  card: {
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
-  },
-  row: {
-    minHeight: 66,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.07)',
-  },
-  label: {
-    color: '#BDBDBD',
-    fontSize: 15,
-    marginLeft: 14,
-    flex: 1,
-  },
-  value: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '900',
-    maxWidth: '50%',
-    textAlign: 'right',
-  },
-  valueGold: {
-    color: gold,
-    fontSize: 17,
-  },
-  infoBox: {
-    marginTop: 18,
-    backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 22,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.09)',
-  },
-  infoHeader: {
+  statusTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginBottom: 14,
   },
-  infoTitle: {
-    color: '#FFF',
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusLabel: {
+    color: '#F5F5F5',
     fontSize: 18,
-    fontWeight: '900',
-  },
-  infoText: {
-    color: '#BDBDBD',
-    fontSize: 14,
-    lineHeight: 23,
-  },
-  trackBtn: {
-    minHeight: 76,
-    borderRadius: 20,
-    backgroundColor: gold,
-    marginTop: 22,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  trackTitle: {
-    color: '#111',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  trackSub: {
-    color: '#222',
-    fontSize: 13,
-    marginTop: 4,
     fontWeight: '700',
-  },
-  callBtn: {
-    minHeight: 72,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: gold,
-    marginTop: 12,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  whatsappBtn: {
-    minHeight: 72,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: green,
-    marginTop: 12,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  actionTextBox: {
     flex: 1,
   },
-  actionTitle: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '900',
+  statusHint: {
+    color: muted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
-  actionSub: {
-    color: '#AAA',
-    fontSize: 14,
+  statusMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  statusMeta: {
+    color: muted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modePill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: borderIdle,
+  },
+  modePillText: {
+    color: '#C8C8C8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  timelineCard: {
+    marginBottom: 16,
+    paddingVertical: 4,
+    gap: 2,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    minHeight: 36,
+  },
+  timelineRail: {
+    width: 18,
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  timelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginTop: 5,
+  },
+  timelineDotActive: {
+    backgroundColor: brandGreen,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     marginTop: 4,
   },
-  cancelBtn: {
-    height: 62,
+  timelineDotDone: {
+    backgroundColor: brandGreen,
+  },
+  timelineLine: {
+    flex: 1,
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginTop: 4,
+    minHeight: 18,
+  },
+  timelineLineDone: {
+    backgroundColor: 'rgba(139,197,63,0.35)',
+  },
+  timelineTitle: {
+    color: muted,
+    fontSize: 14,
+    fontWeight: '500',
+    paddingTop: 1,
+    flex: 1,
+  },
+  timelineTitleEmphasis: {
+    color: '#E8E8E8',
+    fontWeight: '600',
+  },
+  driverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(28,28,28,0.72)',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: red,
-    marginTop: 18,
+    borderColor: borderIdle,
+    padding: 14,
+    marginBottom: 16,
+  },
+  driverAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: borderIdle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  driverInitial: {
+    color: '#F2F2F2',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  driverInfo: {
+    flex: 1,
+    gap: 3,
+  },
+  driverName: {
+    color: '#F5F5F5',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  driverCar: {
+    color: muted,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  ratingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(201,162,39,0.35)',
+  },
+  ratingText: {
+    color: '#F2F2F2',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  tripCard: {
+    backgroundColor: 'rgba(28,28,28,0.72)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: borderIdle,
+    padding: 16,
+    marginBottom: 20,
+    gap: 10,
+  },
+  tripCardTitle: {
+    color: '#F2F2F2',
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  tripRow: {
+    gap: 3,
+  },
+  tripLabel: {
+    color: muted,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  tripValue: {
+    color: '#F0F0F0',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  whenRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginVertical: 2,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 2,
+  },
+  priceLabel: {
+    color: muted,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  priceValue: {
+    color: gold,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  primaryBtn: {
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: brandGreen,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 10,
+    marginBottom: 16,
   },
-  cancelText: {
+  primaryBtnText: {
+    color: '#111',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  contactLabel: {
+    color: muted,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  contactActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  contactBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: borderIdle,
+  },
+  contactPhone: {
+    color: muted,
+    fontSize: 12,
+    textAlign: 'right',
+    marginBottom: 18,
+  },
+  cancelLink: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  cancelLinkText: {
     color: red,
-    fontSize: 17,
-    fontWeight: '900',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

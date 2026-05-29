@@ -46,6 +46,10 @@ export default function RootLayout() {
               <Stack.Screen name="tour-summary" options={{ headerShown: false }} />
               <Stack.Screen name="course-tracking" options={{ headerShown: false }} />
               <Stack.Screen name="city" options={{ headerShown: false }} />
+              <Stack.Screen name="private-driver" options={{ headerShown: false }} />
+              <Stack.Screen name="airport-transfer" options={{ headerShown: false }} />
+              <Stack.Screen name="experiences-private" options={{ headerShown: false }} />
+              <Stack.Screen name="experience-confirmed" options={{ headerShown: false }} />
               <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
               </Stack>
             </RouteGuard>

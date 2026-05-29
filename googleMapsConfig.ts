@@ -1,1 +1,1 @@
-export const GOOGLE_MAPS_API_KEY = 'AIzaSyDYdlqeE8VAWNC8zry90jywNt5ia7vte9E';
+export { GOOGLE_MAPS_API_KEY } from '@/config/appConfig';

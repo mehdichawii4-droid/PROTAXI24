@@ -32,7 +32,7 @@ import { devError, devLog } from '@/utils/devLog';
 
 
 
-const GOOGLE_MAPS_API_KEY = 'AIzaSyDYdlqeE8VAWNC8zry90jywNt5ia7vte9E';
+import { GOOGLE_MAPS_API_KEY } from '@/googleMapsConfig';
 
 const GOLD = '#D4A017';
 

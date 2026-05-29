@@ -9,6 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "validate:experiences": "node scripts/validate-experiences-v1.mjs",
     "postinstall": "patch-package"
   },
   "dependencies": {

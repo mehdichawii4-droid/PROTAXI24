@@ -46,6 +46,7 @@ type TaxiHistoryItem = {
   id: string;
   status?: string;
   airport?: string;
+  flightNumber?: string;
   date?: string;
   time?: string;
   passengers?: string;
@@ -75,6 +76,7 @@ function normalizeFirestoreRideToHistoryItem(
     id,
     status: String(data.status || ''),
     airport: String(data.airport || data.destination || 'Course'),
+    flightNumber: String(data.flightNumber || '').trim(),
     date: String(data.date || ''),
     time: String(data.time || ''),
     passengers: String(data.passengers || '1'),
@@ -330,6 +332,12 @@ export default function HistoryScreen() {
 
               <TaxiInfoRow icon="calendar-outline" text={item.date || '-'} />
               <TaxiInfoRow icon="time-outline" text={item.time || '-'} />
+              {item.flightNumber ? (
+                <TaxiInfoRow
+                  icon="airplane-outline"
+                  text={`Vol : ${item.flightNumber}`}
+                />
+              ) : null}
               <TaxiInfoRow icon="people-outline" text={`${item.passengers || '1'} passagers`} />
               <TaxiInfoRow
                 icon="cash-outline"
@@ -444,12 +452,34 @@ function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
   const paymentLabel = getTourPaymentStatusLabel(booking);
   const checkInLabel = getTourCheckInStatusLabel(booking);
 
-  const openSummary = () => {
+  const openDetail = () => {
+    if (booking.source === 'experiences-private') {
+      router.push({
+        pathname: PROTAXI_ROUTES.experienceConfirmed,
+        params: {
+          tourBookingId: booking.id,
+          experience: booking.experience || booking.circuitName || 'Expérience PROTAXI',
+          formulaLabel: booking.formula || 'Expérience privée',
+          date: booking.date || 'À confirmer',
+          participants: booking.travelers || '1',
+          notes: booking.notes || '',
+          options: booking.options || '',
+          bookingMode: booking.bookingMode || 'private',
+          price: booking.price || 'Sur confirmation',
+        },
+      });
+      return;
+    }
+
     router.push({
       pathname: PROTAXI_ROUTES.tourSummary,
       params: buildTourSummaryParams(booking),
     });
   };
+
+  const hasOptions =
+    Boolean(booking.options?.trim()) &&
+    booking.options !== 'Aucune option supplémentaire';
 
   return (
     <View style={[styles.tourismCard, isGroup && styles.tourismCardGroup]}>
@@ -481,6 +511,12 @@ function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
       </View>
 
       <TourInfoRow icon="calendar-outline" label="Date" value={booking.date || '—'} />
+      {booking.formula ? (
+        <TourInfoRow icon="diamond-outline" label="Formule" value={booking.formula} />
+      ) : null}
+      {hasOptions ? (
+        <TourInfoRow icon="options-outline" label="Options" value={booking.options || '—'} />
+      ) : null}
       <TourInfoRow icon="cash-outline" label="Prix" value={formatTourHistoryPrice(booking.price)} />
       <TourInfoRow
         icon="time-outline"
@@ -506,9 +542,15 @@ function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
           <Text style={styles.tourismCardPrice}>{formatTourHistoryPrice(booking.price)}</Text>
         </View>
 
-        <TouchableOpacity style={styles.tourismSummaryBtn} activeOpacity={0.85} onPress={openSummary}>
-          <MaterialCommunityIcons name="map-marker-path" size={16} color="#111" />
-          <Text style={styles.tourismSummaryBtnText}>Voir le résumé</Text>
+        <TouchableOpacity style={styles.tourismSummaryBtn} activeOpacity={0.85} onPress={openDetail}>
+          <MaterialCommunityIcons
+            name={booking.source === 'experiences-private' ? 'check-circle-outline' : 'map-marker-path'}
+            size={16}
+            color="#111"
+          />
+          <Text style={styles.tourismSummaryBtnText}>
+            {booking.source === 'experiences-private' ? 'Voir la demande' : 'Voir le résumé'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>

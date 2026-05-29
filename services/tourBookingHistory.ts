@@ -76,12 +76,30 @@ export function getTourBookingModeLabel(mode?: string) {
   return mode === 'group' ? 'Expérience groupe' : 'Expérience privée';
 }
 
-export function formatTourHistoryPrice(price?: string) {
-  if (!price) return '—';
-  if (price.includes('DA') || price === 'Sur devis') return price;
-  const amount = parseInt(String(price).replace(/\D/g, ''), 10);
-  if (!amount) return price;
+/** Prix tourisme affichés client / admin (Sur devis, Sur confirmation, DA). */
+export function formatTourDisplayPrice(price?: string) {
+  if (!price?.trim()) return '—';
+  const normalized = price.trim();
+  if (
+    normalized.includes('DA') ||
+    normalized === 'Sur devis' ||
+    normalized === 'Sur confirmation'
+  ) {
+    return normalized;
+  }
+  const amount = parseInt(String(normalized).replace(/\D/g, ''), 10);
+  if (!amount) return normalized;
   return `${amount.toLocaleString('fr-FR')} DA`;
+}
+
+export function formatTourHistoryPrice(price?: string) {
+  return formatTourDisplayPrice(price);
+}
+
+export function getTourBookingSourceLabel(source?: string) {
+  if (source === 'experiences-private') return 'Expériences privées';
+  if (source === 'discover-guelma') return 'Discover Guelma';
+  return source?.trim() || '—';
 }
 
 export function getTourBookingStatusConfig(status?: string) {
@@ -130,7 +148,9 @@ export function buildTourSummaryParams(booking: TourBookingRecord): Record<strin
     date: booking.date || 'À confirmer',
     meetingPoint: booking.meetingPoint || 'Non renseigné',
     notes: booking.notes || 'Aucune note',
-    price: booking.price || 'Sur devis',
+    price:
+      booking.price ||
+      (booking.source === 'experiences-private' ? 'Sur confirmation' : 'Sur devis'),
     circuitName: booking.circuitName || booking.experience || '',
     source: booking.source || 'discover-guelma',
     bookingMode: booking.bookingMode || 'private',

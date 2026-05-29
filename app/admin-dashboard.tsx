@@ -41,6 +41,10 @@ import {
   requestNotificationPermissions,
 } from '@/services/notificationService';
 import { db } from '@/firebase/firestore';
+import {
+  formatTourDisplayPrice,
+  getTourBookingSourceLabel,
+} from '@/services/tourBookingHistory';
 import { devError } from '@/utils/devLog';
 import {
   assignRideToNearestEligibleDriver,
@@ -48,6 +52,17 @@ import {
   isDriverEligibleForDispatch,
   type DriversProfileDoc,
 } from '@/services/driverDispatchService';
+import {
+  getClientReservationStatusLabel,
+  isScheduledAirportRide,
+  isScheduledManagedRide,
+  isScheduledPrivateDriverRide,
+  normalizeRideStatus,
+} from '@/types/driver';
+import {
+  formatPrivateDriverDuration,
+  getPrivateDriverTypeLabel,
+} from '@/services/privateDriverRideService';
 import {
   formatParticipantStatusLabel,
   hasTourGroupAssignment,
@@ -184,6 +199,10 @@ type TourGroup = {
 
 const LIVE_STATUSES = [
   'En attente',
+  'Confirmée',
+  'À attribuer',
+  'En attente confirmation chauffeur',
+  'Chauffeur confirmé',
   'Attribuée',
   'Acceptée',
   'En route',
@@ -200,16 +219,80 @@ const FILTER_OPTIONS = [
 
 const STATUS_PRIORITY: Record<string, number> = {
   'En attente': 0,
-  'Attribuée': 1,
-  'Acceptée': 2,
-  'En route': 3,
-  'Arrivé': 4,
-  'Terminée': 5,
-  'Refusée': 6,
-  'Expirée': 7,
+  'Confirmée': 1,
+  'À attribuer': 2,
+  'En attente confirmation chauffeur': 3,
+  'Chauffeur confirmé': 4,
+  'Attribuée': 5,
+  'Acceptée': 6,
+  'En route': 7,
+  'Arrivé': 8,
+  'Terminée': 9,
+  'Refusée': 10,
+  'Expirée': 11,
 };
 
 const DRIVER_BADGE_STATUSES = ['Attribuée', 'En route'];
+
+const SCHEDULED_AIRPORT_ADMIN_STATUSES = new Set([
+  'Confirmée',
+  'À attribuer',
+  'En attente confirmation chauffeur',
+  'Chauffeur confirmé',
+]);
+
+const getScheduledAirportAdminStatusStyle = (status: string) => {
+  switch (normalizeRideStatus(status)) {
+    case 'Confirmée':
+      return {
+        label: 'Transfert confirmé',
+        bg: 'rgba(139,197,63,0.18)',
+        color: '#8BC53F',
+      };
+    case 'À attribuer':
+      return {
+        label: 'Préparation en cours',
+        bg: 'rgba(255,149,0,0.18)',
+        color: '#FF9500',
+      };
+    case 'En attente confirmation chauffeur':
+      return {
+        label: 'Chauffeur proposé',
+        bg: 'rgba(255,215,0,0.18)',
+        color: gold,
+      };
+    case 'Chauffeur confirmé':
+      return {
+        label: 'Chauffeur confirmé',
+        bg: 'rgba(59,130,246,0.18)',
+        color: '#3B82F6',
+      };
+    default:
+      return {
+        label: normalizeRideStatus(status),
+        bg: 'rgba(255,255,255,0.08)',
+        color: '#AAA',
+      };
+  }
+};
+
+const formatScheduledAirportDateTime = (ride: any) => {
+  const scheduledAt = ride.scheduledAt?.toDate?.();
+  if (scheduledAt instanceof Date && !Number.isNaN(scheduledAt.getTime())) {
+    return scheduledAt.toLocaleString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  const date = String(ride.date || '').trim();
+  const time = String(ride.time || '').trim();
+  if (date && time) return `${date} • ${time}`;
+  return date || time || '—';
+};
 
 const PREMIUM_SERVICE_KEYWORDS = ['aéroport', 'aeroport', 'hôtel', 'hotel'];
 
@@ -265,13 +348,7 @@ const formatTourBookingCreatedAt = (booking: TourBooking) => {
   });
 };
 
-const formatTourPrice = (price?: string) => {
-  if (!price) return '—';
-  if (price.includes('DA') || price === 'Sur devis') return price;
-  const amount = parseInt(String(price).replace(/\D/g, ''), 10);
-  if (!amount) return price;
-  return `${amount.toLocaleString('fr-FR')} DA`;
-};
+const formatTourPrice = (price?: string) => formatTourDisplayPrice(price);
 
 const getTourBookingModeLabel = (mode?: string) =>
   mode === 'group' ? 'Expérience groupe' : 'Expérience privée';
@@ -585,7 +662,7 @@ const [drivers, setDrivers] = useState<any[]>([]);
         return {
           id: d.id,
           ...data,
-          status: String(data.status || '').trim(),
+          status: normalizeRideStatus(String(data.status || '')),
         };
       });
 
@@ -1227,6 +1304,44 @@ useEffect(() => {
     [adminRequests]
   );
 
+  const scheduledAirportPriorityRides = useMemo(
+    () =>
+      adminRequests
+        .filter((ride) => {
+          if (!isScheduledAirportRide(ride)) return false;
+          return SCHEDULED_AIRPORT_ADMIN_STATUSES.has(normalizeRideStatus(ride.status));
+        })
+        .sort((a, b) => {
+          const priorityA = STATUS_PRIORITY[normalizeRideStatus(a.status)] ?? 99;
+          const priorityB = STATUS_PRIORITY[normalizeRideStatus(b.status)] ?? 99;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+
+          const dateA = getRideDate(a)?.getTime() ?? 0;
+          const dateB = getRideDate(b)?.getTime() ?? 0;
+          return dateB - dateA;
+        }),
+    [adminRequests]
+  );
+
+  const scheduledPrivateDriverPriorityRides = useMemo(
+    () =>
+      adminRequests
+        .filter((ride) => {
+          if (!isScheduledPrivateDriverRide(ride)) return false;
+          return SCHEDULED_AIRPORT_ADMIN_STATUSES.has(normalizeRideStatus(ride.status));
+        })
+        .sort((a, b) => {
+          const priorityA = STATUS_PRIORITY[normalizeRideStatus(a.status)] ?? 99;
+          const priorityB = STATUS_PRIORITY[normalizeRideStatus(b.status)] ?? 99;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+
+          const dateA = getRideDate(a)?.getTime() ?? 0;
+          const dateB = getRideDate(b)?.getTime() ?? 0;
+          return dateB - dateA;
+        }),
+    [adminRequests]
+  );
+
   useEffect(() => {
     if (!smartAssignRideId) {
       smartAssignSpin.setValue(0);
@@ -1277,10 +1392,14 @@ useEffect(() => {
     });
   };
 
-  const canShowTracking = (ride: any) =>
-    Boolean(ride?.id) &&
-    ride.status !== 'Terminée' &&
-    ride.status !== 'Expirée';
+  const canShowTracking = (ride: any) => {
+    if (!ride?.id) return false;
+    if (ride.status === 'Terminée' || ride.status === 'Expirée') return false;
+    if (isScheduledManagedRide(ride)) {
+      return ride.status === 'En route' || ride.status === 'Arrivé';
+    }
+    return true;
+  };
 
   const persistAdminInbox = async (title: string, message: string) => {
     await persistNotificationInbox(title, message);
@@ -1380,11 +1499,58 @@ useEffect(() => {
     });
   };
 
+  const promoteScheduledManagedToAssignable = async (ride: any) => {
+    if (!isScheduledManagedRide(ride)) {
+      Alert.alert(
+        'Action indisponible',
+        'Cette action concerne les missions planifiées premium.',
+      );
+      return;
+    }
+
+    if (ride.status !== 'Confirmée') {
+      Alert.alert('Statut invalide', 'Seules les réservations confirmées peuvent passer à attribuer.');
+      return;
+    }
+
+    const isPrivate = isScheduledPrivateDriverRide(ride);
+
+    try {
+      await updateDoc(doc(db, 'rides', ride.id), {
+        status: 'À attribuer',
+        updatedAt: new Date(),
+      });
+
+      await persistAdminInbox(
+        isPrivate ? 'Chauffeur privé' : 'Transfert aéroport',
+        'Une réservation planifiée est prête pour attribution chauffeur.',
+      );
+
+      Alert.alert(
+        'Prêt pour attribution',
+        isPrivate
+          ? 'La mission chauffeur privé est maintenant à attribuer.'
+          : 'Le transfert est maintenant à attribuer.',
+      );
+    } catch (error) {
+      devError('[SCHEDULED MANAGED] promote to assignable failed', error);
+      Alert.alert('Erreur', 'Impossible de mettre à jour le statut.');
+    }
+  };
+
   const assignNearestDriver = async (ride: any) => {
-    if (ride.driverId) {
+    if (ride.driverId && ride.status !== 'À attribuer') {
       Alert.alert(
         'Déjà attribuée',
         'Cette course possède déjà un chauffeur.',
+      );
+      return;
+    }
+
+    if (isScheduledManagedRide(ride) && ride.status !== 'À attribuer') {
+      Alert.alert(
+        'Mission planifiée',
+        'Passez d’abord la réservation à « À attribuer » avant de proposer un chauffeur.',
       );
       return;
     }
@@ -1650,7 +1816,7 @@ useEffect(() => {
           <StatCard
             title="En attente"
             value={controlCenterStats.pending}
-            icon="time-outline"
+            icon="clock-outline"
           />
           <StatCard
             title="En route"
@@ -1663,12 +1829,12 @@ useEffect(() => {
           <StatCard
             title="Terminées"
             value={controlCenterStats.finished}
-            icon="checkmark-done-outline"
+            icon="check-all"
           />
           <StatCard
             title="Revenus estimés"
             value={`${controlCenterStats.estimatedRevenue.toLocaleString('fr-FR')} DA`}
-            icon="cash-outline"
+            icon="cash-multiple"
           />
           <StatCard title="Demandes" value={adminRequests.length} icon="file-document-outline" />
         </View>
@@ -1851,6 +2017,76 @@ useEffect(() => {
               })
             )}
           </View>
+        </View>
+
+        <View style={styles.scheduledAirportSection}>
+          <View style={styles.scheduledAirportHeader}>
+            <MaterialCommunityIcons name="airplane-takeoff" size={26} color={gold} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.scheduledAirportTitle}>Transferts aéroport planifiés</Text>
+              <Text style={styles.scheduledAirportSubtitle}>
+                Réservations différées • Attribution chauffeur
+              </Text>
+            </View>
+            <View style={styles.scheduledAirportCountBadge}>
+              <Text style={styles.scheduledAirportCountBadgeText}>
+                {scheduledAirportPriorityRides.length}
+              </Text>
+            </View>
+          </View>
+
+          {scheduledAirportPriorityRides.length === 0 ? (
+            <View style={styles.scheduledAirportEmpty}>
+              <MaterialCommunityIcons name="calendar-clock" size={28} color={gold} />
+              <Text style={styles.scheduledAirportEmptyText}>
+                Aucun transfert aéroport planifié en cours.
+              </Text>
+            </View>
+          ) : (
+            scheduledAirportPriorityRides.map((ride) => (
+              <ScheduledAirportAdminCard
+                key={`scheduled-airport-${ride.id}`}
+                ride={ride}
+                onPromoteToAssignable={promoteScheduledManagedToAssignable}
+                onAssignNearest={assignNearestDriver}
+              />
+            ))
+          )}
+        </View>
+
+        <View style={styles.scheduledAirportSection}>
+          <View style={styles.scheduledAirportHeader}>
+            <MaterialCommunityIcons name="account-tie" size={26} color={gold} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.scheduledAirportTitle}>Chauffeur privé planifié</Text>
+              <Text style={styles.scheduledAirportSubtitle}>
+                Mises à disposition • Attribution partenaire
+              </Text>
+            </View>
+            <View style={styles.scheduledAirportCountBadge}>
+              <Text style={styles.scheduledAirportCountBadgeText}>
+                {scheduledPrivateDriverPriorityRides.length}
+              </Text>
+            </View>
+          </View>
+
+          {scheduledPrivateDriverPriorityRides.length === 0 ? (
+            <View style={styles.scheduledAirportEmpty}>
+              <MaterialCommunityIcons name="calendar-clock" size={28} color={gold} />
+              <Text style={styles.scheduledAirportEmptyText}>
+                Aucune mission chauffeur privé en cours.
+              </Text>
+            </View>
+          ) : (
+            scheduledPrivateDriverPriorityRides.map((ride) => (
+              <ScheduledPrivateDriverAdminCard
+                key={`scheduled-private-${ride.id}`}
+                ride={ride}
+                onPromoteToAssignable={promoteScheduledManagedToAssignable}
+                onAssignNearest={assignNearestDriver}
+              />
+            ))
+          )}
         </View>
 
         <View style={styles.smartDispatchSection}>
@@ -2283,7 +2519,11 @@ useEffect(() => {
               ? getDriverOnlineLabel(item)
               : null;
           const priorityBadges = getRidePriorityBadges(item);
-          const recommendedDriver = ['En attente', 'Refusée'].includes(item.status)
+          const canRecommendDriver =
+            item.status === 'En attente'
+            || item.status === 'Refusée'
+            || (isScheduledManagedRide(item) && item.status === 'À attribuer');
+          const recommendedDriver = canRecommendDriver
             ? getRecommendedDriver(item, registeredDriversLive, driverProfileById)
             : null;
           const recommendedDistance = recommendedDriver
@@ -2356,6 +2596,18 @@ useEffect(() => {
             <InfoRow icon="navigate-outline" label="Destination" value={item.destination} />
             <InfoRow icon="cash-outline" label="Prix" value={item.price} />
             <InfoRow icon="time-outline" label="Horaire" value={item.time} />
+            {String(item.flightNumber || '').trim() ? (
+              <InfoRow icon="airplane-outline" label="Vol" value={String(item.flightNumber).trim()} />
+            ) : null}
+            {String(item.terminal || '').trim() ? (
+              <InfoRow icon="business-outline" label="Terminal" value={String(item.terminal)} />
+            ) : null}
+            {String(item.bags || '').trim() ? (
+              <InfoRow icon="briefcase-outline" label="Bagages" value={String(item.bags)} />
+            ) : null}
+            {String(item.notes || '').trim() ? (
+              <InfoRow icon="document-text-outline" label="Options" value={String(item.notes)} />
+            ) : null}
 
             {item.driverName && (
               <>
@@ -2382,7 +2634,7 @@ useEffect(() => {
             <View style={styles.actionsRow}>
               {item.status === 'Attribuée' && (
                 <TouchableOpacity style={styles.finishBtn} onPress={() => finishRequest(item)}>
-                  <Ionicons name="checkmark-done-outline" size={21} color="#111" />
+                  <Ionicons name="checkmark-done" size={21} color="#111" />
                   <Text style={styles.finishText}>Terminer</Text>
                 </TouchableOpacity>
               )}
@@ -2405,7 +2657,19 @@ useEffect(() => {
                 <Ionicons name="logo-whatsapp" size={22} color="#FFF" />
               </TouchableOpacity>
 
-             {['En attente', 'Refusée'].includes(item.status) && (
+            {isScheduledManagedRide(item) && item.status === 'Confirmée' ? (
+              <TouchableOpacity
+                style={styles.assignBtn}
+                onPress={() => promoteScheduledManagedToAssignable(item)}
+              >
+                <MaterialCommunityIcons name="calendar-clock" size={22} color="#111" />
+                <Text style={styles.assignText}>Passer à attribuer</Text>
+              </TouchableOpacity>
+            ) : null}
+
+             {(item.status === 'En attente'
+              || item.status === 'Refusée'
+              || (isScheduledManagedRide(item) && item.status === 'À attribuer')) && (
   <>
   <TouchableOpacity
     style={[
@@ -3651,6 +3915,14 @@ function TourBookingCard({
       </View>
 
       <TourInfoRow icon="calendar-outline" label="Date" value={booking.date || '—'} />
+      {booking.formula ? (
+        <TourInfoRow icon="diamond-outline" label="Formule" value={booking.formula} />
+      ) : null}
+      <TourInfoRow
+        icon="compass-outline"
+        label="Source"
+        value={getTourBookingSourceLabel(booking.source)}
+      />
       <TourInfoRow icon="location-outline" label="Rendez-vous" value={booking.meetingPoint || '—'} />
       <TourInfoRow
         icon="people-outline"
@@ -3662,6 +3934,12 @@ function TourBookingCard({
         }
       />
       <TourInfoRow icon="cash-outline" label="Prix" value={formatTourPrice(booking.price)} />
+      {booking.options && booking.options !== 'Aucune option supplémentaire' ? (
+        <TourInfoRow icon="options-outline" label="Options" value={booking.options} />
+      ) : null}
+      {booking.notes && booking.notes !== 'Aucune note' ? (
+        <TourInfoRow icon="chatbubble-outline" label="Notes" value={booking.notes} />
+      ) : null}
       <TourInfoRow icon="flag-outline" label="Statut" value={booking.status || 'pending'} />
       <TourInfoRow
         icon="time-outline"
@@ -4241,6 +4519,199 @@ function BusinessCard({ icon, color, value, label }: any) {
       <Ionicons name={icon} size={28} color={color} />
       <Text style={styles.businessStatValue}>{value}</Text>
       <Text style={styles.businessStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function ScheduledPrivateDriverAdminCard({
+  ride,
+  onPromoteToAssignable,
+  onAssignNearest,
+}: {
+  ride: any;
+  onPromoteToAssignable: (ride: any) => void;
+  onAssignNearest: (ride: any) => void;
+}) {
+  const status = normalizeRideStatus(ride.status);
+  const statusStyle = getScheduledAirportAdminStatusStyle(status);
+  const premiumLabel = getClientReservationStatusLabel(status, ride);
+  const typeLabel = getPrivateDriverTypeLabel(
+    (ride.privateDriverType || ride.mode || 'trajet') as 'trajet' | 'disposition',
+  );
+  const showDriverAssignmentBadge =
+    status === 'En attente confirmation chauffeur'
+    || status === 'Chauffeur confirmé';
+
+  return (
+    <View style={styles.scheduledAirportCard}>
+      <View style={styles.priorityRideTop}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.priorityRideClient}>{ride.client || 'Client'}</Text>
+          <Text style={styles.priorityRideRoute} numberOfLines={2}>
+            {ride.departure || '—'} → {ride.destination || '—'}
+          </Text>
+        </View>
+        <Text style={styles.priorityRidePrice}>{ride.price || '—'}</Text>
+      </View>
+
+      <View style={styles.scheduledAirportBadgesRow}>
+        <View style={[styles.scheduledAirportStatusBadge, { backgroundColor: statusStyle.bg }]}>
+          <Text style={[styles.scheduledAirportStatusBadgeText, { color: statusStyle.color }]}>
+            {premiumLabel}
+          </Text>
+        </View>
+        <View style={styles.scheduledAirportPremiumBadge}>
+          <Text style={styles.scheduledAirportPremiumBadgeText}>CHAUFFEUR PRIVÉ</Text>
+        </View>
+        {showDriverAssignmentBadge ? (
+          <View
+            style={[
+              styles.scheduledAirportDriverBadge,
+              status === 'Chauffeur confirmé'
+                ? styles.scheduledAirportDriverBadgeConfirmed
+                : styles.scheduledAirportDriverBadgeProposed,
+            ]}
+          >
+            <Text style={styles.scheduledAirportDriverBadgeText}>
+              {status === 'Chauffeur confirmé' ? 'Chauffeur confirmé' : 'Chauffeur proposé'}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <InfoRow icon="car-outline" label="Type" value={typeLabel} />
+      <InfoRow icon="calendar-outline" label="Date / heure" value={formatScheduledAirportDateTime(ride)} />
+      {String(ride.durationHours || '').trim() ? (
+        <InfoRow
+          icon="time-outline"
+          label="Durée"
+          value={formatPrivateDriverDuration(String(ride.durationHours))}
+        />
+      ) : null}
+      <InfoRow icon="people-outline" label="Passagers" value={String(ride.passengers || '1')} />
+      {String(ride.notes || '').trim() ? (
+        <InfoRow icon="chatbubble-outline" label="Note" value={String(ride.notes).trim()} />
+      ) : null}
+      <InfoRow icon="call-outline" label="Téléphone" value={ride.phone} />
+      {ride.driverName ? (
+        <InfoRow icon="person-outline" label="Chauffeur" value={ride.driverName} />
+      ) : null}
+
+      <View style={styles.scheduledAirportActionsRow}>
+        {status === 'Confirmée' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onPromoteToAssignable(ride)}
+          >
+            <MaterialCommunityIcons name="calendar-clock" size={22} color="#111" />
+            <Text style={styles.assignText}>Passer à attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {status === 'À attribuer' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onAssignNearest(ride)}
+          >
+            <MaterialCommunityIcons name="account-tie" size={22} color="#111" />
+            <Text style={styles.assignText}>Attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function ScheduledAirportAdminCard({
+  ride,
+  onPromoteToAssignable,
+  onAssignNearest,
+}: {
+  ride: any;
+  onPromoteToAssignable: (ride: any) => void;
+  onAssignNearest: (ride: any) => void;
+}) {
+  const status = normalizeRideStatus(ride.status);
+  const statusStyle = getScheduledAirportAdminStatusStyle(status);
+  const premiumLabel = getClientReservationStatusLabel(status, ride);
+  const airportLabel = String(
+    ride.airport || ride.destination || ride.departure || '—',
+  ).trim();
+  const showDriverAssignmentBadge =
+    status === 'En attente confirmation chauffeur'
+    || status === 'Chauffeur confirmé';
+
+  return (
+    <View style={styles.scheduledAirportCard}>
+      <View style={styles.priorityRideTop}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.priorityRideClient}>{ride.client || 'Client'}</Text>
+          <Text style={styles.priorityRideRoute} numberOfLines={2}>
+            {ride.departure || '—'} → {ride.destination || '—'}
+          </Text>
+        </View>
+        <Text style={styles.priorityRidePrice}>{ride.price || '—'}</Text>
+      </View>
+
+      <View style={styles.scheduledAirportBadgesRow}>
+        <View style={[styles.scheduledAirportStatusBadge, { backgroundColor: statusStyle.bg }]}>
+          <Text style={[styles.scheduledAirportStatusBadgeText, { color: statusStyle.color }]}>
+            {premiumLabel}
+          </Text>
+        </View>
+        <View style={styles.scheduledAirportPremiumBadge}>
+          <Text style={styles.scheduledAirportPremiumBadgeText}>PREMIUM AÉROPORT</Text>
+        </View>
+        {showDriverAssignmentBadge ? (
+          <View
+            style={[
+              styles.scheduledAirportDriverBadge,
+              status === 'Chauffeur confirmé'
+                ? styles.scheduledAirportDriverBadgeConfirmed
+                : styles.scheduledAirportDriverBadgeProposed,
+            ]}
+          >
+            <Text style={styles.scheduledAirportDriverBadgeText}>
+              {status === 'Chauffeur confirmé' ? 'Chauffeur confirmé' : 'Chauffeur proposé'}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <InfoRow icon="airplane-outline" label="Aéroport" value={airportLabel} />
+      <InfoRow icon="calendar-outline" label="Date / heure" value={formatScheduledAirportDateTime(ride)} />
+      {String(ride.flightNumber || '').trim() ? (
+        <InfoRow icon="airplane" label="Vol" value={String(ride.flightNumber).trim()} />
+      ) : null}
+      {String(ride.terminal || '').trim() ? (
+        <InfoRow icon="business-outline" label="Terminal" value={String(ride.terminal)} />
+      ) : null}
+      <InfoRow icon="call-outline" label="Téléphone" value={ride.phone} />
+      {ride.driverName ? (
+        <InfoRow icon="person-outline" label="Chauffeur" value={ride.driverName} />
+      ) : null}
+
+      <View style={styles.scheduledAirportActionsRow}>
+        {status === 'Confirmée' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onPromoteToAssignable(ride)}
+          >
+            <MaterialCommunityIcons name="calendar-clock" size={22} color="#111" />
+            <Text style={styles.assignText}>Passer à attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {status === 'À attribuer' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onAssignNearest(ride)}
+          >
+            <MaterialCommunityIcons name="account-tie" size={22} color="#111" />
+            <Text style={styles.assignText}>Attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -4848,6 +5319,124 @@ const styles = StyleSheet.create({
   },
 
   map: { height: 230, width: '100%' },
+
+  scheduledAirportSection: {
+    backgroundColor: '#101010',
+    borderRadius: 28,
+    borderWidth: 1.5,
+    borderColor: 'rgba(139,197,63,0.35)',
+    padding: 18,
+    marginBottom: 20,
+  },
+  scheduledAirportHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  scheduledAirportTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  scheduledAirportSubtitle: {
+    color: '#AAA',
+    fontSize: 12,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  scheduledAirportCountBadge: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(139,197,63,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  scheduledAirportCountBadgeText: {
+    color: '#8BC53F',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  scheduledAirportEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 28,
+    gap: 10,
+    backgroundColor: card,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: border,
+  },
+  scheduledAirportEmptyText: {
+    color: '#AAA',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+  },
+  scheduledAirportCard: {
+    backgroundColor: card,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.28)',
+    padding: 14,
+    marginBottom: 12,
+  },
+  scheduledAirportBadgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  scheduledAirportStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  scheduledAirportStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  scheduledAirportPremiumBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,215,0,0.18)',
+  },
+  scheduledAirportPremiumBadgeText: {
+    color: gold,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  scheduledAirportDriverBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  scheduledAirportDriverBadgeProposed: {
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderColor: 'rgba(255,215,0,0.35)',
+  },
+  scheduledAirportDriverBadgeConfirmed: {
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderColor: 'rgba(59,130,246,0.35)',
+  },
+  scheduledAirportDriverBadgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  scheduledAirportActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
 
   smartDispatchSection: {
     backgroundColor: '#101010',

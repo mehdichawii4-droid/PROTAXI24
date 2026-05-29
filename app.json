@@ -49,10 +49,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "6650d953-f840-42a9-8e99-edf8629a1042"
-      }
+      "router": {}
     },
     "owner": "mehdiramoul"
   }

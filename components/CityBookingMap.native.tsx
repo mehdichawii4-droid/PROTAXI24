@@ -7,7 +7,7 @@ import { CityBookingMapProps, MapRegion } from './CityBookingMap.types';
 import LiveDriverMapMarker from './LiveDriverMapMarker';
 import { MapView, Marker } from './NativeMapView.native';
 
-const GOOGLE_MAPS_API_KEY = 'AIzaSyDYdlqeE8VAWNC8zry90jywNt5ia7vte9E';
+import { GOOGLE_MAPS_API_KEY } from '@/googleMapsConfig';
 const green = '#4ADE80';
 const gold = '#D4A017';
 

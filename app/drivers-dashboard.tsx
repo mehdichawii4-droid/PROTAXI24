@@ -80,7 +80,7 @@ import {
   isValidMapCoordinate,
 } from '@/utils/rideTracking';
 import { db } from '../firebaseConfig';
-import { devError, devLog } from '@/utils/devLog';
+import { devError, devLog, devWarn } from '@/utils/devLog';
 import {
   acceptRide,
   DriverDispatchError,
@@ -89,10 +89,18 @@ import {
   buildDriverLiveAvailabilityPayload,
   computeIsBusyFromRides,
   DRIVER_ACTIVE_RIDE_STATUSES,
+  DRIVER_ASSIGNMENT_FOCUS_STATUSES,
   getDriverLiveStateAfterRideTransition,
+  isDriverAssignmentAlert,
+  canDriverStartScheduledAirportTransfer,
+  isScheduledAirportRide,
+  isScheduledManagedRide,
+  isScheduledPrivateDriverRide,
 } from '@/types/driver';
 
 const gold = '#FFD700';
+const brandGreen = '#8BC53F';
+const cockpitMuted = '#8A8A8A';
 const bg = '#050505';
 const card = '#0E0E0E';
 const border = '#262626';
@@ -138,17 +146,186 @@ function getGpsTrackingProfile(isBusy: boolean): GpsTrackingProfile {
   return isBusy ? GPS_BUSY_PROFILE : GPS_IDLE_PROFILE;
 }
 
-function showDriverToast(message: string) {
-  showUserSuccess(message);
-}
-
 const DEFAULT_DRIVER_LOCATION = {
   latitude: 36.462,
   longitude: 7.426,
 };
 
-const VISIBLE_STATUSES = ['Attribuée', 'Acceptée', 'En route', 'Arrivé', 'Terminée'];
+type GpsTrackingHint = 'none' | 'stale' | 'waiting';
+
+type GpsPosition = {
+  latitude: number;
+  longitude: number;
+  heading?: number | null;
+  speed?: number | null;
+};
+
+const GPS_ERROR_LOG_INTERVAL_MS = 60_000;
+
+function isDefaultDriverLocation(position: { latitude: number; longitude: number }) {
+  return (
+    Math.abs(position.latitude - DEFAULT_DRIVER_LOCATION.latitude) < 0.0001
+    && Math.abs(position.longitude - DEFAULT_DRIVER_LOCATION.longitude) < 0.0001
+  );
+}
+
+function mapExpoLocationToGpsPosition(
+  location: Location.LocationObject,
+): GpsPosition {
+  return {
+    latitude: location.coords.latitude,
+    longitude: location.coords.longitude,
+    heading: location.coords.heading,
+    speed: location.coords.speed,
+  };
+}
+
+function formatGpsError(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const code = record.code != null ? String(record.code) : '';
+    const message = typeof record.message === 'string' ? record.message : '';
+    if (code && message) return `${code}: ${message}`;
+    if (message) return message;
+  }
+
+  return String(error ?? 'unknown');
+}
+
+function resolveLastKnownGpsPosition(
+  driverLocation: { latitude: number; longitude: number },
+  latestGpsPosition: GpsPosition | null,
+  lastWrittenGps: { latitude: number; longitude: number } | null,
+): GpsPosition | null {
+  if (latestGpsPosition && isValidMapCoordinate(latestGpsPosition)) {
+    return latestGpsPosition;
+  }
+
+  if (lastWrittenGps && isValidMapCoordinate(lastWrittenGps)) {
+    return {
+      latitude: lastWrittenGps.latitude,
+      longitude: lastWrittenGps.longitude,
+      heading: null,
+      speed: null,
+    };
+  }
+
+  if (isValidMapCoordinate(driverLocation) && !isDefaultDriverLocation(driverLocation)) {
+    return {
+      latitude: driverLocation.latitude,
+      longitude: driverLocation.longitude,
+      heading: null,
+      speed: null,
+    };
+  }
+
+  return null;
+}
+
+async function acquireGpsPosition(
+  profile: GpsTrackingProfile,
+  lastKnown: GpsPosition | null,
+): Promise<
+  | { position: GpsPosition; source: 'live' }
+  | { position: GpsPosition; source: 'fallback'; error: unknown }
+  | { position: null; source: 'none'; error: unknown }
+> {
+  const accuracyCandidates = [
+    profile.initialAccuracy,
+    Location.Accuracy.Balanced,
+    Location.Accuracy.Low,
+  ].filter((accuracy, index, list) => list.indexOf(accuracy) === index);
+
+  let lastError: unknown = null;
+
+  for (const accuracy of accuracyCandidates) {
+    try {
+      const location = await Location.getCurrentPositionAsync({ accuracy });
+      return {
+        position: mapExpoLocationToGpsPosition(location),
+        source: 'live',
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastKnown) {
+    return { position: lastKnown, source: 'fallback', error: lastError };
+  }
+
+  return { position: null, source: 'none', error: lastError };
+}
+
+function showDriverToast(message: string) {
+  showUserSuccess(message);
+}
+
+const VISIBLE_STATUSES = [
+  'Attribuée',
+  'En attente confirmation chauffeur',
+  'Chauffeur confirmé',
+  'Acceptée',
+  'En route',
+  'Arrivé',
+  'Terminée',
+];
 const UNASSIGNED_AVAILABLE_STATUSES = ['En attente'];
+
+const ASSIGNMENT_FOCUS_STATUS_SET = new Set<string>(DRIVER_ASSIGNMENT_FOCUS_STATUSES);
+
+function readRideSortTime(ride: any): number {
+  const assignedAt = ride?.assignedAt?.toDate?.()?.getTime?.();
+  if (typeof assignedAt === 'number' && !Number.isNaN(assignedAt)) {
+    return assignedAt;
+  }
+
+  const updatedAt = ride?.updatedAt?.toDate?.()?.getTime?.()
+    ?? (ride?.updatedAt ? new Date(ride.updatedAt).getTime() : 0);
+
+  return typeof updatedAt === 'number' && !Number.isNaN(updatedAt) ? updatedAt : 0;
+}
+
+function sortDriverRidesForDisplay(
+  rides: any[],
+  options: {
+    highlightRideId?: string | null;
+    newAssignmentRideIds?: Record<string, boolean>;
+  },
+): any[] {
+  const { highlightRideId, newAssignmentRideIds = {} } = options;
+
+  const priorityScore = (ride: any) => {
+    const rideId = String(ride?.id || '');
+    if (highlightRideId && rideId === highlightRideId) {
+      return 0;
+    }
+    if (newAssignmentRideIds[rideId]) {
+      return 1;
+    }
+    if (ASSIGNMENT_FOCUS_STATUS_SET.has(normalizeStatus(ride.status))) {
+      return 2;
+    }
+    return 3;
+  };
+
+  return [...rides].sort((left, right) => {
+    const scoreDiff = priorityScore(left) - priorityScore(right);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+
+    return readRideSortTime(right) - readRideSortTime(left);
+  });
+}
+
+function hasDriverActiveRideInList(rides: any[]): boolean {
+  return rides.some((ride) =>
+    DRIVER_ACTIVE_RIDE_STATUSES.includes(
+      normalizeStatus(ride.status) as (typeof DRIVER_ACTIVE_RIDE_STATUSES)[number],
+    ),
+  );
+}
 
 const isRideVisibleToDriver = (ride: any, driverUid: string) => {
   if (!driverUid) return false;
@@ -197,6 +374,17 @@ const normalizeStatus = (status?: string) => {
   if (s === 'arrivé' || s === 'arrive') return 'Arrivé';
   if (s === 'terminée' || s === 'terminee') return 'Terminée';
   if (s === 'refusée' || s === 'refusee') return 'Refusée';
+  if (s === 'confirmée' || s === 'confirmee') return 'Confirmée';
+  if (s === 'à attribuer' || s === 'a attribuer') return 'À attribuer';
+  if (
+    s === 'en attente confirmation chauffeur'
+    || s === 'en attente confirmation'
+  ) {
+    return 'En attente confirmation chauffeur';
+  }
+  if (s === 'chauffeur confirmé' || s === 'chauffeur confirme') {
+    return 'Chauffeur confirmé';
+  }
 
   return status || 'Inconnue';
 };
@@ -238,6 +426,18 @@ const getStatusTheme = (status?: string) => {
         color: '#FF9500',
         label: 'ATTRIBUÉE',
       };
+    case 'En attente confirmation chauffeur':
+      return {
+        bg: 'rgba(201,162,39,0.16)',
+        color: gold,
+        label: 'CONFIRMATION REQUISE',
+      };
+    case 'Chauffeur confirmé':
+      return {
+        bg: 'rgba(139,197,63,0.16)',
+        color: brandGreen,
+        label: 'TRANSFERT CONFIRMÉ',
+      };
     case 'Acceptée':
       return {
         bg: 'rgba(59,130,246,0.18)',
@@ -269,7 +469,10 @@ const getSimulatedEta = (status?: string, ride?: any) => {
   if (ride?.eta) return String(ride.eta);
   switch (normalizeStatus(status)) {
     case 'Attribuée':
+    case 'En attente confirmation chauffeur':
       return 'Acceptation requise';
+    case 'Chauffeur confirmé':
+      return 'Transfert planifié confirmé';
     case 'Acceptée':
       return '~8 min';
     case 'En route':
@@ -361,6 +564,9 @@ export default function DriversDashboardScreen() {
   const [driverRating, setDriverRating] = useState(5);
   const [filter, setFilter] = useState('Toutes');
   const [highlightRideId, setHighlightRideId] = useState<string | null>(null);
+  const [newAssignmentRideIds, setNewAssignmentRideIds] = useState<Record<string, boolean>>(
+    {},
+  );
   const [rides, setRides] = useState<any[]>([]);
   const [isOnline, setIsOnline] = useState(true);
 
@@ -373,9 +579,14 @@ export default function DriversDashboardScreen() {
   const [revenueModalVisible, setRevenueModalVisible] = useState(false);
 
   const [driverLocation, setDriverLocation] = useState(DEFAULT_DRIVER_LOCATION);
+  const [gpsTrackingHint, setGpsTrackingHint] = useState<GpsTrackingHint>('none');
   const [acceptingRideId, setAcceptingRideId] = useState<string | null>(null);
 
   const mapRef = useRef<DriverLiveMapRef | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const pendingCockpitScrollRef = useRef(false);
+  const highlightRideIdRef = useRef<string | null>(null);
+  const newAssignmentRideIdsRef = useRef<Record<string, boolean>>({});
   const ridesRef = useRef<any[]>([]);
   const localPaidRideIdsRef = useRef<string[]>([]);
   const onlineRef = useRef(true);
@@ -410,6 +621,8 @@ export default function DriversDashboardScreen() {
     latitude: number;
     longitude: number;
   } | null>(null);
+  const driverLocationRef = useRef(DEFAULT_DRIVER_LOCATION);
+  const lastGpsErrorLogAtRef = useRef(0);
   const autoArriveHandledRef = useRef<Set<string>>(new Set());
   const autoArriveInFlightRef = useRef<string | null>(null);
   const tryAutoMarkArrivedRef = useRef<
@@ -420,6 +633,37 @@ export default function DriversDashboardScreen() {
   const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
 
   const hasBusyRide = (list = ridesRef.current) => computeIsBusyFromRides(list);
+
+  useEffect(() => {
+    driverLocationRef.current = driverLocation;
+  }, [driverLocation]);
+
+  useEffect(() => {
+    newAssignmentRideIdsRef.current = newAssignmentRideIds;
+  }, [newAssignmentRideIds]);
+
+  useEffect(() => {
+    highlightRideIdRef.current = highlightRideId;
+  }, [highlightRideId]);
+
+  const clearNewAssignment = useCallback((rideId: string) => {
+    const trimmedRideId = String(rideId || '').trim();
+    if (!trimmedRideId) {
+      return;
+    }
+
+    setNewAssignmentRideIds((prev) => {
+      if (!prev[trimmedRideId]) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      delete next[trimmedRideId];
+      return next;
+    });
+
+    setHighlightRideId((prev) => (prev === trimmedRideId ? null : prev));
+  }, []);
 
   useEffect(() => {
     void requestNotificationPermissions();
@@ -593,6 +837,19 @@ export default function DriversDashboardScreen() {
   const shouldTrackGps =
     Platform.OS !== 'web' && !!driverUid && isOnline && appIsActive;
 
+  const warnGpsThrottled = useCallback(
+    (logTag: string, message: string, error?: unknown) => {
+      const now = Date.now();
+      if (now - lastGpsErrorLogAtRef.current < GPS_ERROR_LOG_INTERVAL_MS) {
+        return;
+      }
+
+      lastGpsErrorLogAtRef.current = now;
+      devWarn(logTag, message, error != null ? formatGpsError(error) : undefined);
+    },
+    [],
+  );
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       setAppIsActive(nextState === 'active');
@@ -600,6 +857,12 @@ export default function DriversDashboardScreen() {
 
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (!shouldTrackGps) {
+      setGpsTrackingHint('none');
+    }
+  }, [shouldTrackGps]);
 
   const stopGpsTracking = () => {
     locationSubscriptionRef.current?.remove();
@@ -791,6 +1054,11 @@ export default function DriversDashboardScreen() {
 
       const driverRides = visibleRides.map((ride) => applyLocalPaidOverlay(ride));
 
+      let assignmentFocusRideId: string | null = null;
+      const assignmentBatch: Record<string, boolean> = {};
+      let shouldOpenCockpit = false;
+      let shouldShowAllRidesFilter = false;
+
       driverRides.forEach((ride) => {
         const status = normalizeStatus(ride.status);
         const rideContext = mapRideNotificationContext(ride);
@@ -799,31 +1067,46 @@ export default function DriversDashboardScreen() {
 
         if (prevStatus === status) return;
 
-        if (status === 'Attribuée') {
+        if (isDriverAssignmentAlert(ride, status)) {
           // Remote push (onRideUpdatedPush) is the single notification channel for new assignments.
           // Vibration only here avoids duplicate banner/sound with foreground Expo push.
           Vibration.vibrate(500);
-          devLog('[PUSH] assignment detected — local notify skipped (remote push)', {
+          devLog('[DRIVER ASSIGNMENT] alert', {
             rideId: ride.id,
+            status,
+            scheduled: isScheduledManagedRide(ride),
           });
+
+          assignmentFocusRideId = ride.id;
+          assignmentBatch[ride.id] = true;
+
+          if (!hasDriverActiveRideInList(ridesRef.current)) {
+            shouldOpenCockpit = true;
+          }
+
+          if (status === 'En attente confirmation chauffeur') {
+            shouldShowAllRidesFilter = true;
+          }
 
           if (waitingTimersRef.current[ride.id]) {
             clearTimeout(waitingTimersRef.current[ride.id]);
           }
 
-          waitingTimersRef.current[ride.id] = setTimeout(() => {
-            const currentRide = ridesRef.current.find((item) => item.id === ride.id);
-            if (
-              currentRide &&
-              normalizeStatus(currentRide.status) === 'Attribuée'
-            ) {
-              void notifyDriver(
-                notifiedRef.current,
-                'client_waiting',
-                mapRideNotificationContext(currentRide)
-              );
-            }
-          }, CLIENT_WAITING_MS);
+          if (status === 'Attribuée') {
+            waitingTimersRef.current[ride.id] = setTimeout(() => {
+              const currentAssignedRide = ridesRef.current.find((item) => item.id === ride.id);
+              if (
+                currentAssignedRide
+                && normalizeStatus(currentAssignedRide.status) === 'Attribuée'
+              ) {
+                void notifyDriver(
+                  notifiedRef.current,
+                  'client_waiting',
+                  mapRideNotificationContext(currentAssignedRide),
+                );
+              }
+            }, CLIENT_WAITING_MS);
+          }
         }
 
         if (status === 'Annulée' || status === 'Refusée') {
@@ -843,8 +1126,44 @@ export default function DriversDashboardScreen() {
         }
       });
 
-      setRides(driverRides);
-      ridesRef.current = driverRides;
+      const nextNewAssignmentRideIds = { ...newAssignmentRideIdsRef.current };
+      Object.keys(assignmentBatch).forEach((rideId) => {
+        nextNewAssignmentRideIds[rideId] = true;
+      });
+      Object.keys(nextNewAssignmentRideIds).forEach((rideId) => {
+        const trackedRide = driverRides.find((item) => item.id === rideId);
+        if (!trackedRide) {
+          delete nextNewAssignmentRideIds[rideId];
+        } else if (
+          !isDriverAssignmentAlert(trackedRide, trackedRide.status)
+          && normalizeStatus(trackedRide.status) !== 'Chauffeur confirmé'
+        ) {
+          delete nextNewAssignmentRideIds[rideId];
+        }
+      });
+
+      const nextHighlightRideId = assignmentFocusRideId ?? highlightRideIdRef.current;
+      const sortedDriverRides = sortDriverRidesForDisplay(driverRides, {
+        highlightRideId: nextHighlightRideId,
+        newAssignmentRideIds: nextNewAssignmentRideIds,
+      });
+
+      if (assignmentFocusRideId) {
+        setHighlightRideId(assignmentFocusRideId);
+      }
+
+      setNewAssignmentRideIds(nextNewAssignmentRideIds);
+
+      if (shouldShowAllRidesFilter) {
+        setFilter('Toutes');
+      }
+
+      if (shouldOpenCockpit) {
+        pendingCockpitScrollRef.current = true;
+      }
+
+      setRides(sortedDriverRides);
+      ridesRef.current = sortedDriverRides;
 
       void syncDriverLiveMetadata();
     };
@@ -919,6 +1238,61 @@ export default function DriversDashboardScreen() {
 
     let cancelled = false;
 
+    const applyGpsPosition = async (currentPosition: GpsPosition) => {
+      if (cancelled) return;
+
+      setDriverLocation({
+        latitude: currentPosition.latitude,
+        longitude: currentPosition.longitude,
+      });
+
+      void tryAutoMarkArrivedRef.current?.(currentPosition);
+
+      await syncDriverLivePosition(currentPosition, { force: true });
+
+      mapRef.current?.animateToRegion({
+        latitude: currentPosition.latitude,
+        longitude: currentPosition.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      });
+    };
+
+    const startGpsWatch = async (profile: GpsTrackingProfile) => {
+      locationSubscriptionRef.current = await Location.watchPositionAsync(
+        {
+          accuracy: profile.watchAccuracy,
+          timeInterval: profile.watchTimeIntervalMs,
+          distanceInterval: profile.watchDistanceMeters,
+        },
+        (nextLocation) => {
+          const newPosition = mapExpoLocationToGpsPosition(nextLocation);
+
+          if (!isValidMapCoordinate(newPosition)) {
+            return;
+          }
+
+          setGpsTrackingHint('none');
+
+          setDriverLocation({
+            latitude: newPosition.latitude,
+            longitude: newPosition.longitude,
+          });
+
+          void tryAutoMarkArrivedRef.current?.(newPosition);
+
+          void syncDriverLivePosition(newPosition);
+
+          mapRef.current?.animateToRegion({
+            latitude: newPosition.latitude,
+            longitude: newPosition.longitude,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          });
+        },
+      );
+    };
+
     const startGpsTracking = async () => {
       const profile = getGpsTrackingProfile(isDriverBusyRef.current);
 
@@ -942,68 +1316,81 @@ export default function DriversDashboardScreen() {
           mode: profile.mode,
         });
 
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: profile.initialAccuracy,
-        });
+        const lastKnown = resolveLastKnownGpsPosition(
+          driverLocationRef.current,
+          latestGpsPositionRef.current,
+          lastWrittenGpsRef.current,
+        );
+
+        const acquired = await acquireGpsPosition(profile, lastKnown);
 
         if (cancelled) return;
 
-        const currentPosition = {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          heading: location.coords.heading,
-          speed: location.coords.speed,
-        };
+        if (acquired.position) {
+          await applyGpsPosition(acquired.position);
 
-        setDriverLocation({
-          latitude: currentPosition.latitude,
-          longitude: currentPosition.longitude,
-        });
-
-        void tryAutoMarkArrivedRef.current?.(currentPosition);
-
-        await syncDriverLivePosition(currentPosition, { force: true });
-
-        mapRef.current?.animateToRegion({
-          latitude: currentPosition.latitude,
-          longitude: currentPosition.longitude,
-          latitudeDelta: 0.02,
-          longitudeDelta: 0.02,
-        });
-
-        locationSubscriptionRef.current = await Location.watchPositionAsync(
-          {
-            accuracy: profile.watchAccuracy,
-            timeInterval: profile.watchTimeIntervalMs,
-            distanceInterval: profile.watchDistanceMeters,
-          },
-          (nextLocation) => {
-            const newPosition = {
-              latitude: nextLocation.coords.latitude,
-              longitude: nextLocation.coords.longitude,
-              heading: nextLocation.coords.heading,
-              speed: nextLocation.coords.speed,
-            };
-
-            setDriverLocation({
-              latitude: newPosition.latitude,
-              longitude: newPosition.longitude,
-            });
-
-            void tryAutoMarkArrivedRef.current?.(newPosition);
-
-            void syncDriverLivePosition(newPosition);
-
-            mapRef.current?.animateToRegion({
-              latitude: newPosition.latitude,
-              longitude: newPosition.longitude,
-              latitudeDelta: 0.02,
-              longitudeDelta: 0.02,
-            });
+          if (acquired.source === 'fallback') {
+            warnGpsThrottled(
+              profile.logTag,
+              'GPS fix unavailable — using last known position',
+              acquired.error,
+            );
+            setGpsTrackingHint('stale');
+          } else {
+            setGpsTrackingHint('none');
           }
-        );
+        } else {
+          warnGpsThrottled(
+            profile.logTag,
+            'GPS fix unavailable — waiting for watch updates',
+            acquired.error,
+          );
+          setGpsTrackingHint('waiting');
+        }
+
+        try {
+          await startGpsWatch(profile);
+        } catch (watchError) {
+          warnGpsThrottled(
+            profile.logTag,
+            'GPS watch unavailable — dashboard remains usable',
+            watchError,
+          );
+
+          if (!acquired.position) {
+            setGpsTrackingHint('waiting');
+          }
+        }
       } catch (error) {
-        devError(`${profile.logTag} tracking unavailable`, error);
+        const lastKnown = resolveLastKnownGpsPosition(
+          driverLocationRef.current,
+          latestGpsPositionRef.current,
+          lastWrittenGpsRef.current,
+        );
+
+        if (lastKnown) {
+          warnGpsThrottled(
+            `${profile.logTag}`,
+            'GPS setup degraded — using last known position',
+            error,
+          );
+
+          if (!cancelled) {
+            await applyGpsPosition(lastKnown);
+            setGpsTrackingHint('stale');
+          }
+          return;
+        }
+
+        warnGpsThrottled(
+          `${profile.logTag}`,
+          'GPS tracking degraded — waiting for signal',
+          error,
+        );
+
+        if (!cancelled) {
+          setGpsTrackingHint('waiting');
+        }
       }
     };
 
@@ -1014,7 +1401,7 @@ export default function DriversDashboardScreen() {
       devLog('[LIVE GPS] tracking stopped', { driverUid });
       stopGpsTracking();
     };
-  }, [shouldTrackGps, driverUid, isDriverBusy]);
+  }, [shouldTrackGps, driverUid, isDriverBusy, warnGpsThrottled]);
 
   useEffect(
     () => () => {
@@ -1063,11 +1450,37 @@ export default function DriversDashboardScreen() {
   const currentRide = useMemo(() => {
     if (activeRide) return activeRide;
     if (paymentPendingRide) return paymentPendingRide;
-    return (
-      rides.find((ride) => normalizeStatus(ride.status) === 'Attribuée') ??
-      null
-    );
-  }, [rides, activeRide, paymentPendingRide]);
+
+    const pendingRides = rides.filter((ride) => {
+      const rideStatus = normalizeStatus(ride.status);
+      return (
+        DRIVER_ASSIGNMENT_FOCUS_STATUSES.includes(
+          rideStatus as (typeof DRIVER_ASSIGNMENT_FOCUS_STATUSES)[number],
+        )
+        || rideStatus === 'Chauffeur confirmé'
+      ) && String(ride.driverId || '').trim() === driverUid;
+    });
+
+    return pendingRides[0] ?? null;
+  }, [rides, activeRide, paymentPendingRide, driverUid]);
+
+  useEffect(() => {
+    if (!pendingCockpitScrollRef.current) {
+      return;
+    }
+
+    pendingCockpitScrollRef.current = false;
+
+    const frame = requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+      devLog('[DRIVER ASSIGNMENT] scrolled to cockpit', {
+        rideId: highlightRideId,
+        currentRideId: currentRide?.id ?? null,
+      });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [highlightRideId, currentRide?.id, rides.length]);
 
   const completedRides = useMemo(
     () => rides.filter((ride) => normalizeStatus(ride.status) === 'Terminée'),
@@ -1321,9 +1734,13 @@ export default function DriversDashboardScreen() {
         } finally {
           setAcceptingRideId(null);
         }
+
+        clearNewAssignment(rideId);
       } else if (finalStatus === 'Refusée') {
+        const refusedRide = rides.find((ride) => ride.id === rideId);
+        const scheduledManaged = isScheduledManagedRide(refusedRide);
         const refusePayload = {
-          status: 'En attente',
+          status: scheduledManaged ? 'À attribuer' : 'En attente',
           driverId: '',
           driverName: '',
           driverPhone: '',
@@ -1356,6 +1773,8 @@ export default function DriversDashboardScreen() {
           rideId,
           driverUid,
         });
+
+        clearNewAssignment(rideId);
         return;
       } else {
         await updateDoc(doc(db, 'rides', rideId), {
@@ -1365,10 +1784,14 @@ export default function DriversDashboardScreen() {
           ...(finalStatus === 'Terminée' ? { finishedAt: serverTimestamp() } : {}),
         });
 
+        const transitioningRide = rides.find((item) => item.id === rideId);
         const liveState = getDriverLiveStateAfterRideTransition(
           isOnline,
           finalStatus,
           rideId,
+          transitioningRide
+            ? { ...transitioningRide, status: finalStatus }
+            : { status: finalStatus },
         );
 
         devLog('[RIDE STATE] transition', {
@@ -1489,7 +1912,7 @@ export default function DriversDashboardScreen() {
           <Ionicons name="logo-whatsapp" size={22} color="#FFF" />
         </TouchableOpacity>
 
-        {status === 'Attribuée' && (
+        {(status === 'Attribuée' || status === 'En attente confirmation chauffeur') && (
           <>
             <TouchableOpacity
               style={styles.acceptBtn}
@@ -1505,6 +1928,20 @@ export default function DriversDashboardScreen() {
               <Text style={styles.rejectText}>REFUSER</Text>
             </TouchableOpacity>
           </>
+        )}
+
+        {status === 'Chauffeur confirmé'
+        && canDriverStartScheduledManagedMission(ride) && (
+          <TouchableOpacity
+            style={styles.acceptBtn}
+            onPress={() => updateRideStatus(ride.id, 'En route')}
+          >
+            <Text style={styles.acceptText}>
+              {isScheduledPrivateDriverRide(ride)
+                ? 'DÉMARRER LA MISSION'
+                : 'DÉMARRER LE TRANSFERT'}
+            </Text>
+          </TouchableOpacity>
         )}
 
         {status === 'En attente' && (
@@ -1570,7 +2007,7 @@ export default function DriversDashboardScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#FFF" />
@@ -1663,6 +2100,16 @@ export default function DriversDashboardScreen() {
               gold={gold}
             />
           )}
+          {gpsTrackingHint !== 'none' && Platform.OS !== 'web' ? (
+            <View style={styles.gpsHintBanner} pointerEvents="none">
+              <Ionicons name="navigate-outline" size={14} color="#FBBF24" />
+              <Text style={styles.gpsHintText}>
+                {gpsTrackingHint === 'stale'
+                  ? 'GPS instable — dernière position connue affichée.'
+                  : 'Signal GPS en attente…'}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <Text style={styles.sectionTitle}>Course actuelle</Text>
@@ -1670,6 +2117,7 @@ export default function DriversDashboardScreen() {
         {currentRide ? (
           <CurrentRideCockpit
             ride={currentRide}
+            showNewMissionBadge={Boolean(newAssignmentRideIds[currentRide.id])}
             latitude={currentRideLatitude}
             longitude={currentRideLongitude}
             isOnline={isOnline}
@@ -1833,10 +2281,13 @@ export default function DriversDashboardScreen() {
             );
             const showChatEntry =
               Boolean(ride.driverId) && isRideChatOpen(normalizeStatus(ride.status));
+            const showNewMissionBadge = Boolean(newAssignmentRideIds[ride.id]);
 
             return (
-            <View
+            <TouchableOpacity
               key={ride.id}
+              activeOpacity={0.92}
+              onPress={() => clearNewAssignment(ride.id)}
               style={[
                 styles.rideCard,
                 highlightRideId === ride.id && styles.rideCardHighlight,
@@ -1849,6 +2300,11 @@ export default function DriversDashboardScreen() {
                 </View>
 
                 <View style={styles.rideTopRight}>
+                  {showNewMissionBadge ? (
+                    <View style={styles.newMissionBadge}>
+                      <Text style={styles.newMissionBadgeText}>Nouvelle mission</Text>
+                    </View>
+                  ) : null}
                   {showChatEntry ? (
                     <TouchableOpacity
                       style={styles.chatEntryBtn}
@@ -1884,6 +2340,14 @@ export default function DriversDashboardScreen() {
                 <MiniInfo icon="call-outline" label="Téléphone" value={ride.phone || '—'} />
                 <MiniInfo icon="time-outline" label="Horaire" value={ride.time || '—'} />
                 <MiniInfo icon="people-outline" label="Passagers" value={String(ride.passengers || '—')} />
+                {String(ride.rideType || '') === 'airport'
+                && String(ride.flightNumber || '').trim() ? (
+                  <MiniInfo
+                    icon="airplane-outline"
+                    label="Aéroport"
+                    value={`Vol : ${String(ride.flightNumber).trim()}`}
+                  />
+                ) : null}
               </View>
 
               {normalizeStatus(ride.status) === 'Terminée'
@@ -1909,7 +2373,7 @@ export default function DriversDashboardScreen() {
               ) : null}
 
               <View style={styles.actionsRow}>{renderRideActions(ride)}</View>
-            </View>
+            </TouchableOpacity>
             );
           })
         )}
@@ -2202,8 +2666,207 @@ type CockpitPerformance = {
   liveEarnings: number;
 };
 
+const SCHEDULED_PRE_ROUTE_STATUSES = [
+  'Attribuée',
+  'En attente confirmation chauffeur',
+  'Chauffeur confirmé',
+] as const;
+
+function isScheduledPreRouteCockpit(ride: any, status: string) {
+  return (
+    isScheduledManagedRide(ride)
+    && SCHEDULED_PRE_ROUTE_STATUSES.includes(
+      status as (typeof SCHEDULED_PRE_ROUTE_STATUSES)[number],
+    )
+  );
+}
+
+function isScheduledConfirmationCockpit(ride: any, status: string) {
+  return (
+    isScheduledManagedRide(ride)
+    && (status === 'En attente confirmation chauffeur' || status === 'Attribuée')
+  );
+}
+
+const PRIVATE_DRIVER_START_LEAD_MS = 20 * 60 * 1000;
+
+function resolveRideScheduledAtMs(ride: any): number | null {
+  const scheduledAt = ride?.scheduledAt;
+  if (
+    scheduledAt
+    && typeof scheduledAt === 'object'
+    && 'toDate' in scheduledAt
+    && typeof scheduledAt.toDate === 'function'
+  ) {
+    const date = scheduledAt.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+  }
+
+  if (scheduledAt instanceof Date && !Number.isNaN(scheduledAt.getTime())) {
+    return scheduledAt.getTime();
+  }
+
+  return null;
+}
+
+function canDriverStartScheduledManagedMission(ride: any) {
+  if (isScheduledAirportRide(ride)) {
+    return canDriverStartScheduledAirportTransfer(ride);
+  }
+
+  if (isScheduledPrivateDriverRide(ride)) {
+    const scheduledMs = resolveRideScheduledAtMs(ride);
+    if (scheduledMs === null) {
+      const dateStr = String(ride?.date || '').trim();
+      if (!dateStr || dateStr === 'À confirmer' || dateStr === 'Maintenant') {
+        return false;
+      }
+      return dateStr === new Date().toLocaleDateString('fr-FR');
+    }
+
+    const now = Date.now();
+    if (now >= scheduledMs) {
+      return true;
+    }
+
+    return now >= scheduledMs - PRIVATE_DRIVER_START_LEAD_MS;
+  }
+
+  return false;
+}
+
+function formatScheduledWhen(ride: any) {
+  const scheduledAt = ride?.scheduledAt;
+  if (
+    scheduledAt
+    && typeof scheduledAt === 'object'
+    && 'toDate' in scheduledAt
+    && typeof scheduledAt.toDate === 'function'
+  ) {
+    const date = scheduledAt.toDate();
+    if (date instanceof Date && !Number.isNaN(date.getTime())) {
+      return date.toLocaleString('fr-FR', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+  }
+
+  const date = String(ride?.date || '').trim();
+  const time = String(ride?.time || '').trim();
+  if (date && time && date !== '—' && time !== '—') {
+    return `${date} · ${time}`;
+  }
+  return date || time || '—';
+}
+
+function getTransferDirectionLabel(mode: unknown) {
+  const value = String(mode || '').trim();
+  if (value === 'deposer') return 'Aller à l’aéroport';
+  if (value === 'recuperer') return 'Depuis l’aéroport';
+  return null;
+}
+
+function formatFlightLine(ride: any) {
+  const parts: string[] = [];
+  const flight = String(ride?.flightNumber || '').trim();
+  const terminal = String(ride?.terminal || '').trim();
+  if (flight) parts.push(`Vol ${flight}`);
+  if (terminal) parts.push(`Terminal ${terminal}`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+function ScheduledTripDetails({ ride }: { ride: any }) {
+  const isPrivate = isScheduledPrivateDriverRide(ride);
+  const airport = String(ride?.airport || ride?.destination || '—').trim();
+  const direction = getTransferDirectionLabel(ride?.mode);
+  const privateType =
+    String(ride?.mode || ride?.privateDriverType || '').trim() === 'disposition'
+      ? 'Chauffeur à disposition'
+      : String(ride?.mode || ride?.privateDriverType || '').trim() === 'trajet'
+        ? 'Trajet privé'
+        : null;
+  const address =
+    String(ride?.address || '').trim()
+    || String(ride?.departure || '').trim()
+    || String(ride?.destination || '').trim()
+    || '—';
+  const flightLine = formatFlightLine(ride);
+  const clientName = String(ride?.client || ride?.clientName || 'Client').trim();
+  const clientPhone = String(ride?.phone || '—').trim();
+  const durationHours = String(ride?.durationHours || '').trim();
+
+  return (
+    <View style={styles.scheduledTripCard}>
+      <ScheduledDetailRow label="Quand" value={formatScheduledWhen(ride)} />
+      {isPrivate && privateType ? (
+        <ScheduledDetailRow label="Service" value={privateType} />
+      ) : null}
+      {!isPrivate ? <ScheduledDetailRow label="Aéroport" value={airport} /> : null}
+      {!isPrivate && direction ? (
+        <ScheduledDetailRow label="Sens" value={direction} />
+      ) : null}
+      <ScheduledDetailRow label="Départ" value={String(ride?.departure || address)} />
+      <ScheduledDetailRow
+        label="Destination"
+        value={String(ride?.destination || '—')}
+      />
+      {isPrivate && durationHours ? (
+        <ScheduledDetailRow label="Durée" value={`${durationHours} h`} />
+      ) : null}
+      {!isPrivate && flightLine ? (
+        <ScheduledDetailRow label="Vol" value={flightLine} />
+      ) : null}
+      <View style={styles.scheduledDivider} />
+      <ScheduledDetailRow label="Client" value={clientName} />
+      <ScheduledDetailRow label="Téléphone" value={clientPhone} />
+    </View>
+  );
+}
+
+function ScheduledDetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.scheduledDetailRow}>
+      <Text style={styles.scheduledDetailLabel}>{label}</Text>
+      <Text style={styles.scheduledDetailValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function CockpitContactCompact({
+  onCall,
+  onWhatsapp,
+}: {
+  onCall: () => void;
+  onWhatsapp: () => void;
+}) {
+  return (
+    <View style={styles.cockpitContactCompact}>
+      <Text style={styles.cockpitContactCompactLabel}>Besoin d&apos;aide ?</Text>
+      <View style={styles.cockpitContactCompactActions}>
+        <TouchableOpacity style={styles.cockpitContactIconBtn} onPress={onCall} activeOpacity={0.85}>
+          <Ionicons name="call-outline" size={20} color={gold} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.cockpitContactIconBtn}
+          onPress={onWhatsapp}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="logo-whatsapp" size={20} color={brandGreen} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 type CurrentRideCockpitProps = {
   ride: any;
+  showNewMissionBadge?: boolean;
   latitude: number;
   longitude: number;
   isOnline: boolean;
@@ -2257,6 +2920,7 @@ function CockpitPerformanceGrid({ performance }: { performance: CockpitPerforman
 
 function CurrentRideCockpit({
   ride,
+  showNewMissionBadge = false,
   isOnline,
   performance,
   onCall,
@@ -2286,6 +2950,14 @@ function CurrentRideCockpit({
   const showConfirmPayment = canConfirmCashPayment(ride, driverUid);
   const collectLabel = formatRidePaymentAmount(payment.fareAmount);
   const distance = getSimulatedDistance(ride);
+  const scheduledPreRoute = isScheduledPreRouteCockpit(ride, status);
+  const scheduledConfirmation = isScheduledConfirmationCockpit(ride, status);
+  const isPrivateScheduled = isScheduledPrivateDriverRide(ride);
+  const scheduledConfirmed =
+    isScheduledManagedRide(ride) && status === 'Chauffeur confirmé';
+  const showStartTransfer =
+    scheduledConfirmed && canDriverStartScheduledManagedMission(ride);
+  const showPendingStartHints = scheduledConfirmed && !showStartTransfer;
 
   useEffect(() => {
     devLog('[RIDE PAYMENT] cockpit render', {
@@ -2319,6 +2991,11 @@ function CurrentRideCockpit({
   }, [ride?.id, fadeAnim, slideAnim]);
 
   useEffect(() => {
+    if (scheduledPreRoute) {
+      statusPulse.setValue(0.65);
+      return;
+    }
+
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(statusPulse, {
@@ -2336,7 +3013,7 @@ function CurrentRideCockpit({
 
     anim.start();
     return () => anim.stop();
-  }, [statusPulse, status]);
+  }, [statusPulse, status, scheduledPreRoute]);
 
   return (
     <Animated.View
@@ -2348,6 +3025,121 @@ function CurrentRideCockpit({
         },
       ]}
     >
+      {scheduledPreRoute ? (
+        <>
+          <View style={styles.cockpitHeaderTop}>
+            <View style={styles.cockpitOnlineBadge}>
+              <View
+                style={[
+                  styles.cockpitOnlineDot,
+                  { backgroundColor: isOnline ? brandGreen : '#EF4444' },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.cockpitOnlineText,
+                  { color: isOnline ? brandGreen : '#EF4444' },
+                ]}
+              >
+                {isOnline ? 'ONLINE' : 'OFFLINE'}
+              </Text>
+            </View>
+            <View style={styles.scheduledModePill}>
+              <Text style={styles.scheduledModePillText}>Planifié</Text>
+            </View>
+          </View>
+
+          {showNewMissionBadge ? (
+            <View style={styles.cockpitNewMissionBanner}>
+              <Ionicons name="sparkles-outline" size={16} color="#111" />
+              <Text style={styles.cockpitNewMissionBannerText}>Nouvelle mission</Text>
+            </View>
+          ) : null}
+
+          <View style={styles.scheduledHero}>
+            {scheduledConfirmation ? (
+              <>
+                <Text style={styles.scheduledHeroTitle}>Confirmation requise</Text>
+                <Text style={styles.scheduledHeroSubtitle}>
+                  {isPrivateScheduled ? 'Chauffeur privé planifié' : 'Transfert aéroport planifié'}
+                </Text>
+                <Text style={styles.scheduledHeroHint}>
+                  Répondez pour confirmer votre disponibilité.
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.scheduledHeroTitle}>
+                  {isPrivateScheduled ? 'Mission confirmée' : 'Transfert confirmé'}
+                </Text>
+                <Text style={styles.scheduledHeroSubtitle}>
+                  {isPrivateScheduled
+                    ? 'Vous êtes réservé pour cette mise à disposition.'
+                    : 'Vous êtes réservé pour ce transfert.'}
+                </Text>
+                {showPendingStartHints ? (
+                  <>
+                    <Text style={styles.scheduledAvailabilityHint}>
+                      Vous restez disponible pour les courses immédiates.
+                    </Text>
+                    <Text style={styles.scheduledHeroHint}>
+                      {isPrivateScheduled
+                        ? 'Le démarrage sera disponible 20 min avant l&apos;horaire prévu.'
+                        : 'Le démarrage sera disponible selon le temps d&apos;approche vers l&apos;aéroport.'}
+                    </Text>
+                  </>
+                ) : null}
+              </>
+            )}
+          </View>
+
+          <ScheduledTripDetails ride={ride} />
+
+          <View style={styles.scheduledPriceRow}>
+            <Text style={styles.scheduledDetailLabel}>Tarif indicatif</Text>
+            <Text style={styles.scheduledPriceValue}>{collectLabel}</Text>
+          </View>
+
+          <View style={styles.cockpitPrimaryActions}>
+            {scheduledConfirmation ? (
+              <>
+                <TouchableOpacity
+                  style={styles.cockpitPrimaryBtnGreen}
+                  onPress={onAccept}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons name="checkmark-circle" size={22} color="#111" />
+                  <Text style={styles.cockpitPrimaryText}>ACCEPTER</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.cockpitRejectBtn}
+                  onPress={onReject}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons name="close-circle" size={22} color="#FFF" />
+                  <Text style={styles.cockpitRejectText}>REFUSER</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+
+            {showStartTransfer ? (
+              <TouchableOpacity
+                style={styles.cockpitPrimaryBtnGreen}
+                onPress={onStart}
+                activeOpacity={0.9}
+              >
+                <Ionicons name="play-circle" size={22} color="#111" />
+                <Text style={styles.cockpitPrimaryText}>
+                  {isPrivateScheduled ? 'DÉMARRER LA MISSION' : 'DÉMARRER LE TRANSFERT'}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
+          <CockpitContactCompact onCall={onCall} onWhatsapp={onWhatsapp} />
+        </>
+      ) : (
+        <>
       <View style={styles.cockpitHeader}>
         <View style={styles.cockpitHeaderTop}>
           <View style={styles.cockpitOnlineBadge}>
@@ -2374,6 +3166,13 @@ function CurrentRideCockpit({
             </Text>
           </View>
         </View>
+
+        {showNewMissionBadge ? (
+          <View style={styles.cockpitNewMissionBanner}>
+            <Ionicons name="sparkles-outline" size={16} color="#111" />
+            <Text style={styles.cockpitNewMissionBannerText}>Nouvelle mission</Text>
+          </View>
+        ) : null}
 
         <View style={styles.cockpitStatusHero}>
           <Animated.View
@@ -2463,6 +3262,14 @@ function CurrentRideCockpit({
             label="Destination"
             value={ride.destination || 'À confirmer'}
           />
+          {String(ride.rideType || '') === 'airport'
+          && String(ride.flightNumber || '').trim() ? (
+            <CockpitInfo
+              icon="airplane"
+              label="Transfert"
+              value={`Vol : ${String(ride.flightNumber).trim()}`}
+            />
+          ) : null}
           <CockpitInfo icon="time" label="Heure" value={ride.time || '—'} />
           <CockpitInfo
             icon="star"
@@ -2527,7 +3334,7 @@ function CurrentRideCockpit({
       <CockpitPerformanceGrid performance={performance} />
 
       <View style={styles.cockpitPrimaryActions}>
-        {status === 'Attribuée' && (
+        {status === 'Attribuée' && !isScheduledManagedRide(ride) && (
           <>
             <TouchableOpacity style={styles.cockpitPrimaryBtn} onPress={onAccept}>
               <Ionicons name="checkmark-circle" size={24} color="#111" />
@@ -2586,6 +3393,8 @@ function CurrentRideCockpit({
           </TouchableOpacity>
         ) : null}
       </View>
+        </>
+      )}
     </Animated.View>
   );
 }
@@ -2725,6 +3534,27 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,215,0,0.25)',
   },
   map: { flex: 1 },
+  gpsHintBanner: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    top: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.35)',
+  },
+  gpsHintText: {
+    flex: 1,
+    color: '#FDE68A',
+    fontSize: 11,
+    fontWeight: '600',
+  },
   statsRow: {
     flexDirection: 'row',
     gap: 10,
@@ -3263,6 +4093,120 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
   },
+  cockpitPrimaryBtnGreen: {
+    height: 58,
+    borderRadius: 16,
+    backgroundColor: brandGreen,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scheduledModePill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  scheduledModePillText: {
+    color: '#C8C8C8',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  scheduledHero: {
+    marginBottom: 14,
+    gap: 5,
+  },
+  scheduledHeroTitle: {
+    color: '#F2F2F2',
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  scheduledHeroSubtitle: {
+    color: '#E0E0E0',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  scheduledHeroHint: {
+    color: cockpitMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  scheduledAvailabilityHint: {
+    color: brandGreen,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  scheduledTripCard: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    padding: 14,
+    gap: 10,
+    marginBottom: 12,
+  },
+  scheduledDetailRow: {
+    gap: 3,
+  },
+  scheduledDetailLabel: {
+    color: cockpitMuted,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  scheduledDetailValue: {
+    color: '#F0F0F0',
+    fontSize: 15,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  scheduledDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginVertical: 2,
+  },
+  scheduledPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  scheduledPriceValue: {
+    color: gold,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  cockpitContactCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  cockpitContactCompactLabel: {
+    color: cockpitMuted,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  cockpitContactCompactActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  cockpitContactIconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
   cockpitPrimaryText: {
     color: '#111',
     fontSize: 17,
@@ -3354,6 +4298,35 @@ const styles = StyleSheet.create({
   rideCardHighlight: {
     borderColor: gold,
     borderWidth: 2,
+  },
+  newMissionBadge: {
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,215,0,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,215,0,0.45)',
+  },
+  newMissionBadgeText: {
+    color: gold,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  cockpitNewMissionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginBottom: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: gold,
+  },
+  cockpitNewMissionBannerText: {
+    color: '#111',
+    fontSize: 12,
+    fontWeight: '900',
   },
   rideTop: {
     flexDirection: 'row',

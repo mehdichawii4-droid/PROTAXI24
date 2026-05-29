@@ -1,5 +1,5 @@
-import { httpsCallable } from '@firebase/functions';
-import { functions } from '@/firebase/functionsInstance';
+import { httpsCallable, type HttpsCallable } from '@firebase/functions';
+import { getFirebaseFunctions } from '@/firebase/functionsInstance';
 
 type ResolveLoginIdentifierRequest = {
   email?: string;
@@ -11,13 +11,24 @@ type ResolveLoginIdentifierResponse = {
   email?: string | null;
 };
 
-const resolveLoginIdentifierCallable = httpsCallable<
+let resolveLoginIdentifierCallable: HttpsCallable<
   ResolveLoginIdentifierRequest,
   ResolveLoginIdentifierResponse
->(functions, 'resolveLoginIdentifier');
+> | null = null;
+
+function getResolveLoginIdentifierCallable() {
+  if (!resolveLoginIdentifierCallable) {
+    resolveLoginIdentifierCallable = httpsCallable<
+      ResolveLoginIdentifierRequest,
+      ResolveLoginIdentifierResponse
+    >(getFirebaseFunctions(), 'resolveLoginIdentifier');
+  }
+
+  return resolveLoginIdentifierCallable;
+}
 
 export async function lookupLoginEmailByPhone(phone: string): Promise<string | null> {
-  const result = await resolveLoginIdentifierCallable({ phone });
+  const result = await getResolveLoginIdentifierCallable()({ phone });
   const { found, email } = result.data;
 
   if (!found) return null;
@@ -26,7 +37,7 @@ export async function lookupLoginEmailByPhone(phone: string): Promise<string | n
 }
 
 export async function isLoginEmailRegistered(email: string): Promise<boolean> {
-  const result = await resolveLoginIdentifierCallable({
+  const result = await getResolveLoginIdentifierCallable()({
     email: email.trim().toLowerCase(),
   });
   return Boolean(result.data.found);

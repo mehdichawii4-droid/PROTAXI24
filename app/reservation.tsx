@@ -33,7 +33,21 @@ import {
   normalizeRidePayment,
 } from '@/services/ridePayment';
 import { formatRidePriceDzd } from '@/utils/rideTracking';
+import {
+  canClientCancelReservation,
+  canClientOpenCourseTracking,
+  getClientReservationStatusLabel,
+  isScheduledAirportRide,
+  isScheduledPrivateDriverRide,
+  shouldShowAssignedDriverToClient,
+} from '@/types/driver';
 import { db } from '../firebaseConfig';
+
+const SCHEDULED_AIRPORT_CONFIRMATION_MESSAGE =
+  'Votre transfert aéroport est confirmé par PROTAXI. Notre équipe vérifiera les détails de votre vol et vous attribuera un chauffeur avant votre trajet.';
+
+const SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE =
+  'Votre demande chauffeur privé est confirmée par PROTAXI. Notre équipe vous attribuera un chauffeur partenaire avant le jour J.';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
@@ -123,7 +137,7 @@ export default function ReservationsScreen() {
 
 Service : ${item.service || 'Transfert'}
 Aéroport : ${item.airport || '-'}
-Adresse : ${item.address || '-'}
+${String(item.flightNumber || '').trim() ? `Vol : ${String(item.flightNumber).trim()}\n` : ''}Adresse : ${item.address || '-'}
 Date : ${item.date || '-'}
 Heure : ${item.time || '-'}
 Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
@@ -181,13 +195,17 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
   );
 };
 
- const getStatusStyle = (status: string) => {
+ const getStatusStyle = (status: string, item: any) => {
   if (status === 'Annulée') return styles.cancelledBadge;
   if (status === 'Terminée') return styles.finishedBadge;
   if (status === 'Arrivé') return styles.arrivedBadge;
   if (status === 'En route') return styles.onWayBadge;
-  if (status === 'Acceptée') return styles.confirmedBadge;
-  if (status === 'Attribuée') return styles.searchBadge;
+  if (status === 'Acceptée' || status === 'Chauffeur confirmé') return styles.confirmedBadge;
+  if (status === 'Attribuée' || status === 'En attente confirmation chauffeur') {
+    return styles.searchBadge;
+  }
+  if (status === 'Confirmée') return styles.confirmedBadge;
+  if (status === 'À attribuer') return styles.pendingBadge;
   return styles.pendingBadge;
 };
 
@@ -196,8 +214,10 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
   if (status === 'Terminée') return 'checkmark-circle';
   if (status === 'Arrivé') return 'location';
   if (status === 'En route') return 'car';
-  if (status === 'Acceptée') return 'shield-checkmark';
-  if (status === 'Attribuée') return 'search';
+  if (status === 'Acceptée' || status === 'Chauffeur confirmé') return 'shield-checkmark';
+  if (status === 'Attribuée' || status === 'En attente confirmation chauffeur') return 'search';
+  if (status === 'Confirmée') return 'checkmark-circle';
+  if (status === 'À attribuer') return 'calendar-outline';
   return 'time';
 };
 
@@ -234,9 +254,14 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
 
         {reservations.map((item, index) => {
          const status = item.status || 'En attente';
+const statusLabel = getClientReservationStatusLabel(status, item);
 const isCancelled = status === 'Annulée';
 const isFinished = status === 'Terminée';
-const canCancel = ['En attente', 'Attribuée', 'Acceptée'].includes(status);
+const isScheduledAirport = isScheduledAirportRide(item);
+const isScheduledPrivate = isScheduledPrivateDriverRide(item);
+const canCancel = canClientCancelReservation(status, item);
+const canTrack = canClientOpenCourseTracking(status, item);
+const showDriverDetails = shouldShowAssignedDriverToClient(status, item) && item.driverName;
 const canRate = isFinished && canClientRateDriverFromRide(item);
 const ridePayment = normalizeRidePayment(item);
 const paymentStatusConfig = getRidePaymentStatusConfig(ridePayment.paymentStatus);
@@ -264,21 +289,32 @@ const reservationId = String(item.id || '').slice(-6);
 
                   <View style={{ flex: 1 }}>
                     <Text style={styles.airport}>
-                      {item.airport || 'Aéroport'}
+                      {item.service || item.airport || 'Réservation PROTAXI'}
                     </Text>
                     <Text style={styles.bookingId}>Réservation #{reservationId}</Text>
                   </View>
                 </View>
 
-                <View style={[styles.statusBadge, getStatusStyle(status)]}>
+                <View style={[styles.statusBadge, getStatusStyle(status, item)]}>
                   <Ionicons
                     name={getStatusIcon(status) as any}
                     size={14}
                     color="#FFF"
                   />
-                  <Text style={styles.statusText}>{status}</Text>
+                  <Text style={styles.statusText}>{statusLabel}</Text>
                 </View>
               </View>
+
+              {(isScheduledAirport || isScheduledPrivate) && status === 'Confirmée' ? (
+                <View style={styles.scheduledBanner}>
+                  <Ionicons name="shield-checkmark" size={18} color={gold} />
+                  <Text style={styles.scheduledBannerText}>
+                    {isScheduledPrivate
+                      ? SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE
+                      : SCHEDULED_AIRPORT_CONFIRMATION_MESSAGE}
+                  </Text>
+                </View>
+              ) : null}
 
               <View style={styles.infoBox}>
                 <InfoRow icon="location-outline" text={item.address || '-'} />
@@ -292,7 +328,25 @@ const reservationId = String(item.id || '').slice(-6);
                   icon="briefcase-outline"
                   text={`${item.bags || '0'} bagages`}
                 />
-                  
+                {String(item.flightNumber || '').trim() ? (
+                  <InfoRow
+                    icon="airplane-outline"
+                    text={`Vol : ${String(item.flightNumber).trim()}`}
+                  />
+                ) : null}
+                {String(item.terminal || '').trim() ? (
+                  <InfoRow icon="business-outline" text={`Terminal : ${item.terminal}`} />
+                ) : null}
+                {String(item.airline || '').trim() ? (
+                  <InfoRow icon="ribbon-outline" text={`Compagnie : ${item.airline}`} />
+                ) : null}
+                {item.meetAndGreet ? (
+                  <InfoRow icon="person-outline" text="Pancarte accueil : oui" />
+                ) : null}
+                {String(item.notes || '').trim() ? (
+                  <InfoRow icon="document-text-outline" text={String(item.notes)} />
+                ) : null}
+
                 <InfoRow
   icon="cash-outline"
   text={formatRidePaymentAmount(ridePayment.fareAmount)}
@@ -319,7 +373,7 @@ const reservationId = String(item.id || '').slice(-6);
   icon="gift-outline"
   text={`Points fidélité : ${item.clientPoints || 0}`}
 />
-                {item.driverName ? (
+                {showDriverDetails ? (
   <>
     <InfoRow
       icon="person-circle-outline"
@@ -348,7 +402,7 @@ const reservationId = String(item.id || '').slice(-6);
                   <Text style={styles.actionText}>Détails</Text>
                 </TouchableOpacity>
 
-                {!isCancelled && !isFinished && (
+                {!isCancelled && !isFinished && canTrack && (
                   <TouchableOpacity
   style={styles.trackingBtn}
   onPress={async () => {
@@ -621,6 +675,24 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
+  scheduledBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(139,197,63,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.22)',
+  },
+  scheduledBannerText: {
+    flex: 1,
+    color: '#D8D8D8',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
   infoBox: {
     borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.035)',

@@ -17,18 +17,10 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
-import {
-  getFirestoreDb,
-  getTourBookingDocRef,
-  getTourBookingsCollectionRef,
-} from '@/firebase/firestore';
 import { getFirebaseAuth } from '@/firebase/authInstance';
-import { matchOrCreateTourGroup } from '@/services/tourGroupMatching';
-import { generateTourTicketCode } from '@/services/tourGroupTicket';
-import { calculateGroupPaymentAmounts } from '@/services/tourGroupPayment';
+import { createTourBooking } from '@/services/createTourBooking';
 import { logNavigation, PROTAXI_ROUTES } from '@/utils/navigation';
-import { devError, devLog, devWarn } from '@/utils/devLog';
+import { devError, devLog } from '@/utils/devLog';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
 
 const green = '#8BC53F';
@@ -486,17 +478,11 @@ export default function TourBookingScreen() {
     setIsSubmitting(true);
 
     try {
-      getFirestoreDb();
-      const groupTicketCode = isGroupMode ? generateTourTicketCode(experienceTitle) : '';
-      const groupPaymentAmounts = isGroupMode
-        ? calculateGroupPaymentAmounts(estimatedPriceRaw, Number(travelersValue) || 1)
-        : null;
-
-      const bookingDoc = await addDoc(getTourBookingsCollectionRef(), {
+      const result = await createTourBooking({
         clientUid,
-        experience: experienceTitle,
+        experienceTitle,
         circuitName: circuitName || experienceTitle,
-        formula: formula || '',
+        formula,
         bookingMode,
         duration,
         steps: stepsValue,
@@ -506,115 +492,13 @@ export default function TourBookingScreen() {
         meetingPoint: meetingPointLabel,
         notes: notesValue,
         price: estimatedPriceRaw,
-        groupDeparture: isGroupMode ? groupDeparture : '',
-        groupMeetingPoint: isGroupMode ? groupMeetingPoint : '',
-        groupSpotsLeft: isGroupMode ? groupSpotsLeft : '',
-        groupTravelers: isGroupMode ? groupTravelers : '',
-        status: 'pending',
-        ticketCode: groupTicketCode,
-        checkInStatus: isGroupMode ? 'pending' : '',
-        paymentStatus: isGroupMode ? 'unpaid' : '',
-        depositAmount: groupPaymentAmounts?.depositAmount ?? 0,
-        remainingAmount: groupPaymentAmounts?.remainingAmount ?? 0,
-        paymentMethod: isGroupMode ? 'cash' : '',
         source,
-        ...partnerFields,
-        createdAt: serverTimestamp(),
+        groupDeparture: isGroupMode ? groupDeparture : undefined,
+        groupMeetingPoint: isGroupMode ? groupMeetingPoint : undefined,
+        groupSpotsLeft: isGroupMode ? groupSpotsLeft : undefined,
+        groupTravelers: isGroupMode ? groupTravelers : undefined,
+        partnerFields,
       });
-
-      let matchedGroupId = '';
-      let matchedGroupBooked = '';
-      let matchedGroupRemaining = '';
-
-      if (isGroupMode) {
-        try {
-          devLog('[TourBooking] groupMatching:before', {
-            bookingId: bookingDoc.id,
-            experience: experienceTitle,
-            date: dateValue,
-            departure: groupDeparture,
-            meetingPoint: groupMeetingPoint,
-          });
-
-          const groupMatch = await matchOrCreateTourGroup({
-            experience: experienceTitle,
-            date: dateValue,
-            departure: groupDeparture,
-            meetingPoint: groupMeetingPoint,
-            participant: {
-              bookingId: bookingDoc.id,
-              displayName: 'Voyageur PROTAXI',
-              travelersCount: Number(travelersValue) || 1,
-              status: 'pending',
-            },
-          });
-
-          devLog('[TourBooking] groupMatching:success', groupMatch);
-
-          matchedGroupId = groupMatch.groupId;
-          matchedGroupBooked = String(groupMatch.booked);
-          matchedGroupRemaining = String(groupMatch.remaining);
-
-          if (bookingDoc.id.trim() && groupMatch.groupId.trim()) {
-            await updateDoc(getTourBookingDocRef(bookingDoc.id), {
-              groupId: groupMatch.groupId,
-            });
-          } else {
-            devWarn('[TourBooking] groupMatching:skipBookingUpdate', {
-              bookingId: bookingDoc.id,
-              groupId: groupMatch.groupId,
-            });
-          }
-
-          devLog('[TourBooking] groupMatching:bookingUpdated', {
-            bookingId: bookingDoc.id,
-            groupId: groupMatch.groupId,
-          });
-        } catch (groupError) {
-          devError('CONFIRM EXPERIENCE ERROR FULL:', groupError);
-          devError('[TourBooking] groupMatching:error', groupError);
-          devLog(groupError);
-
-          if (groupError instanceof Error) {
-            devLog('[TourBooking] groupMatching:error message:', groupError.message);
-            devLog('[TourBooking] groupMatching:error stack:', groupError.stack);
-          }
-
-          if (groupError && typeof groupError === 'object' && 'code' in groupError) {
-            devLog('[TourBooking] groupMatching:error code:', (groupError as { code?: string }).code);
-          }
-        }
-      }
-
-      const summaryParams: Record<string, string> = {
-        experience: experienceTitle,
-        duration,
-        steps: stepsValue,
-        options: optionsValue,
-        travelers: travelersValue,
-        date: dateValue,
-        meetingPoint: meetingPointLabel,
-        notes: notesValue,
-        price: estimatedPriceRaw,
-        circuitName: circuitName || experienceTitle,
-        source,
-        bookingMode,
-        tourBookingId: bookingDoc.id,
-      };
-
-      if (formula) summaryParams.formula = formula;
-
-      if (isGroupMode) {
-        summaryParams.groupDeparture = groupDeparture;
-        summaryParams.groupSpotsLeft = matchedGroupRemaining || groupSpotsLeft;
-        summaryParams.groupTravelers = matchedGroupBooked || groupTravelers;
-        summaryParams.groupMeetingPoint = groupMeetingPoint;
-        if (matchedGroupId) {
-          summaryParams.groupId = matchedGroupId;
-          summaryParams.groupBooked = matchedGroupBooked;
-          summaryParams.groupRemaining = matchedGroupRemaining;
-        }
-      }
 
       logNavigation(`${PROTAXI_ROUTES.tourSummary}?experience=${experienceTitle}`, {
         source,
@@ -623,7 +507,7 @@ export default function TourBookingScreen() {
 
       router.push({
         pathname: PROTAXI_ROUTES.tourSummary,
-        params: summaryParams,
+        params: result.summaryParams,
       });
     } catch (error) {
       devError('CONFIRM EXPERIENCE ERROR FULL:', error);

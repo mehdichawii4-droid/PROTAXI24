@@ -4,6 +4,7 @@ import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  Alert,
   Animated,
   Image,
   ImageBackground,
@@ -29,6 +30,7 @@ function extractFirstName(fullName?: string | null): string {
 }
 
 const green = '#8BC53F';
+const gold = '#D4A017';
 const bg = '#050505';
 const card = '#0D0D0D';
 const glow = 'rgba(139,197,63,0.18)';
@@ -36,7 +38,17 @@ const muted = '#8A8A8A';
 const radiusLg = 28;
 const radiusMd = 24;
 
-type QuickAction = {
+type PrimaryExperienceAction = {
+  id: string;
+  eyebrow: string;
+  title: string;
+  titleAccent: string;
+  subtitle: string;
+  image: number;
+  route: string;
+};
+
+type CompactQuickAction = {
   id: string;
   title: string;
   subtitle: string;
@@ -50,6 +62,7 @@ type ServiceGridItem = {
   icon: keyof typeof Ionicons.glyphMap;
   route: string;
   badge?: string;
+  disabled?: boolean;
 };
 
 type NavItem = {
@@ -60,13 +73,23 @@ type NavItem = {
   badge?: number;
 };
 
-const QUICK_ACTIONS: QuickAction[] = [
+const PRIMARY_EXPERIENCE: PrimaryExperienceAction = {
+  id: 'experiences',
+  eyebrow: 'EXPÉRIENCES PRIVÉES',
+  title: 'Expériences privées',
+  titleAccent: 'premium',
+  subtitle: 'Nature, patrimoine et moments sur mesure à Guelma',
+  image: require('../assets/images/theatre-romain.jpg'),
+  route: PROTAXI_ROUTES.experiencesPrivate,
+};
+
+const COMPACT_QUICK_ACTIONS: CompactQuickAction[] = [
   {
-    id: 'taxi',
-    title: 'Réserver une course',
-    subtitle: 'Taxi ville 24h/24',
-    image: require('../assets/images/hero-bg.png'),
-    route: PROTAXI_ROUTES.city,
+    id: 'chauffeur',
+    title: 'Chauffeur privé',
+    subtitle: 'Trajet privé · à disposition',
+    image: require('../assets/images/services/chauffeur-prive.jpg'),
+    route: PROTAXI_ROUTES.privateDriver,
   },
   {
     id: 'airport',
@@ -78,8 +101,14 @@ const QUICK_ACTIONS: QuickAction[] = [
 ];
 
 const SERVICE_GRID: ServiceGridItem[] = [
-  { id: 'city', label: 'Taxi ville', icon: 'car-sport-outline', route: PROTAXI_ROUTES.city },
-  { id: 'chauffeur', label: 'Chauffeur privé', icon: 'person-outline', route: PROTAXI_ROUTES.city },
+  {
+    id: 'city',
+    label: 'Taxi ville',
+    icon: 'car-sport-outline',
+    route: PROTAXI_ROUTES.city,
+    badge: 'Bientôt',
+    disabled: true,
+  },
   { id: 'long', label: 'Long trajet', icon: 'map-outline', route: PROTAXI_ROUTES.longDistance },
   { id: 'hotels', label: 'Hôtels', icon: 'bed-outline', route: PROTAXI_ROUTES.hotel },
   { id: 'airport', label: 'Aéroport', icon: 'airplane-outline', route: PROTAXI_ROUTES.airport },
@@ -190,14 +219,24 @@ export default function HomeScreen() {
         <HomeHeader firstName={firstName} unreadCount={unreadCount} />
 
         <FadeSlideIn delay={80}>
-          <View style={styles.quickActionsRow}>
-            {QUICK_ACTIONS.map((action) => (
-              <QuickActionCard
+          <PrimaryExperienceCard
+            action={PRIMARY_EXPERIENCE}
+            onPress={() =>
+              navigateTo(PRIMARY_EXPERIENCE.route, {
+                source: 'home-primary-experience',
+                label: PRIMARY_EXPERIENCE.title,
+              })
+            }
+          />
+
+          <View style={styles.compactQuickRow}>
+            {COMPACT_QUICK_ACTIONS.map((action) => (
+              <CompactQuickActionCard
                 key={action.id}
                 action={action}
                 onPress={() =>
                   navigateTo(action.route, {
-                    source: 'home-quick-actions',
+                    source: 'home-compact-quick-actions',
                     label: action.title,
                   })
                 }
@@ -206,36 +245,33 @@ export default function HomeScreen() {
           </View>
         </FadeSlideIn>
 
-        <FadeSlideIn delay={160}>
-          <DiscoverGuelmaBanner
-            onPress={() =>
-              navigateTo(PROTAXI_ROUTES.discoverGuelma, {
-                source: 'home-discover-banner',
-                label: 'Découvrir Guelma',
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={240}>
-          <SectionHeader title="Services rapides" subtitle="Mobilité & tourisme local" />
+        <FadeSlideIn delay={200}>
+          <SectionHeader title="Autres services" subtitle="Compléments & à venir" />
           <View style={styles.servicesGrid}>
             {SERVICE_GRID.map((item) => (
               <ServiceGridCard
                 key={item.id}
                 item={item}
-                onPress={() =>
+                onPress={() => {
+                  if (item.disabled) {
+                    Alert.alert(
+                      'Bientôt disponible',
+                      'Le service Taxi ville arrive prochainement sur PROTAXI.'
+                    );
+                    return;
+                  }
+
                   navigateTo(item.route, {
                     source: 'home-services-grid',
                     label: item.label,
-                  })
-                }
+                  });
+                }}
               />
             ))}
           </View>
         </FadeSlideIn>
 
-        <FadeSlideIn delay={320}>
+        <FadeSlideIn delay={280}>
           <GuideSection
             onPress={() =>
               navigateTo(PROTAXI_ROUTES.discoverGuelma, {
@@ -284,7 +320,7 @@ function HomeHeader({
             <MaterialCommunityIcons name="taxi" size={18} color={green} />
             <Text style={styles.logoText}>PROTAXI</Text>
           </View>
-          <Text style={styles.logoTagline}>MOBILITÉ & TOURISME LOCAL</Text>
+          <Text style={styles.logoTagline}>EXPÉRIENCES · CHAUFFEUR · AÉROPORT</Text>
         </View>
 
         <TouchableOpacity
@@ -311,41 +347,56 @@ function HomeHeader({
       <View style={styles.greetingBlock}>
         <Text style={styles.greeting}>Bonjour, {firstName} 👋</Text>
         <Text style={styles.greetingSub}>Où allons-nous aujourd&apos;hui ?</Text>
-        <Text style={styles.greetingSlogan}>Votre mobilité premium, partout en Guelma.</Text>
+        <Text style={styles.greetingSlogan}>
+          Expériences, chauffeur privé et transferts premium en Guelma.
+        </Text>
       </View>
     </FadeSlideIn>
   );
 }
 
-function QuickActionCard({
+function PrimaryExperienceCard({
   action,
   onPress,
 }: {
-  action: QuickAction;
+  action: PrimaryExperienceAction;
   onPress: () => void;
 }) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.quickCard, pressed && styles.pressedScale]}
+      style={({ pressed }) => [styles.primaryHeroCard, pressed && styles.pressedScale]}
       onPress={onPress}
     >
       <ImageBackground
         source={action.image}
-        style={styles.quickImage}
-        imageStyle={styles.quickImageStyle}
+        style={styles.primaryHeroImage}
+        imageStyle={styles.primaryHeroImageStyle}
       >
         <LinearGradient
-          colors={['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.88)']}
-          style={styles.quickGradient}
+          colors={['rgba(5,5,5,0.12)', 'rgba(5,5,5,0.5)', 'rgba(5,5,5,0.94)']}
+          style={styles.primaryHeroGradient}
         >
-          <View style={styles.quickGlowOrb} />
-          <View style={styles.quickFooter}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.quickTitle}>{action.title}</Text>
-              <Text style={styles.quickSubtitle}>{action.subtitle}</Text>
+          <View style={styles.primaryHeroGlowOrb} />
+
+          <View style={styles.primaryHeroContent}>
+            <View style={styles.primaryHeroPill}>
+              <Text style={styles.primaryHeroPillText}>{action.eyebrow}</Text>
             </View>
-            <View style={styles.quickArrow}>
-              <Ionicons name="arrow-forward" size={16} color="#111" />
+
+            <View style={styles.primaryHeroTitleRow}>
+              <Text style={styles.primaryHeroTitle}>{action.title}</Text>
+              <Text style={styles.primaryHeroTitleAccent}> {action.titleAccent}</Text>
+            </View>
+
+            <View style={styles.primaryHeroAccentLine} />
+
+            <Text style={styles.primaryHeroSubtitle}>{action.subtitle}</Text>
+
+            <View style={styles.primaryHeroFooter}>
+              <TouchableOpacity style={styles.primaryHeroCta} activeOpacity={0.9} onPress={onPress}>
+                <Text style={styles.primaryHeroCtaText}>Explorer</Text>
+                <Ionicons name="chevron-forward" size={16} color="#111" />
+              </TouchableOpacity>
             </View>
           </View>
         </LinearGradient>
@@ -354,46 +405,40 @@ function QuickActionCard({
   );
 }
 
-function DiscoverGuelmaBanner({ onPress }: { onPress: () => void }) {
+function CompactQuickActionCard({
+  action,
+  onPress,
+}: {
+  action: CompactQuickAction;
+  onPress: () => void;
+}) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.discoverCard, pressed && styles.pressedScale]}
+      style={({ pressed }) => [styles.compactQuickCard, pressed && styles.pressedScale]}
       onPress={onPress}
     >
-      <Image
-        source={require('../assets/images/theatre-romain.jpg')}
-        resizeMode="cover"
-        style={styles.discoverImage}
-      />
-
-      <LinearGradient
-        colors={['rgba(5,5,5,0.15)', 'rgba(5,5,5,0.55)', 'rgba(5,5,5,0.92)']}
-        style={styles.discoverGradient}
-      />
-
-      <View style={styles.discoverContent}>
-        <View style={styles.discoverPill}>
-          <Text style={styles.discoverPillText}>DÉCOUVRIR GUELMA</Text>
-        </View>
-
-        <Text style={styles.discoverTitle}>
-          Explorez les merveilles de notre <Text style={styles.discoverAccent}>wilaya</Text>
-        </Text>
-        <Text style={styles.discoverDesc}>
-          Nature, histoire, culture et expériences uniques avec PROTAXI.
-        </Text>
-
-        <TouchableOpacity style={styles.discoverCta} activeOpacity={0.9} onPress={onPress}>
-          <Text style={styles.discoverCtaText}>Découvrir</Text>
-          <Ionicons name="chevron-forward" size={16} color="#111" />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.discoverDots}>
-        <View style={[styles.dot, styles.dotActive]} />
-        <View style={styles.dot} />
-        <View style={styles.dot} />
-      </View>
+      <ImageBackground
+        source={action.image}
+        style={styles.compactQuickImage}
+        imageStyle={styles.compactQuickImageStyle}
+      >
+        <LinearGradient
+          colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.9)']}
+          style={styles.compactQuickGradient}
+        >
+          <View style={styles.compactQuickFooter}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.compactQuickTitle}>{action.title}</Text>
+              <Text style={styles.compactQuickSubtitle} numberOfLines={2}>
+                {action.subtitle}
+              </Text>
+            </View>
+            <View style={styles.compactQuickArrow}>
+              <Ionicons name="arrow-forward" size={14} color="#111" />
+            </View>
+          </View>
+        </LinearGradient>
+      </ImageBackground>
     </Pressable>
   );
 }
@@ -405,24 +450,38 @@ function ServiceGridCard({
   item: ServiceGridItem;
   onPress: () => void;
 }) {
+  const isDisabled = Boolean(item.disabled);
+
   return (
     <Pressable
-      style={({ pressed }) => [styles.gridCard, pressed && styles.pressedScale]}
+      style={({ pressed }) => [
+        styles.gridCard,
+        isDisabled && styles.gridCardDisabled,
+        pressed && !isDisabled && styles.pressedScale,
+      ]}
       onPress={onPress}
     >
       {item.badge ? (
-        <View style={styles.gridBadge}>
-          <Text style={styles.gridBadgeText}>{item.badge}</Text>
+        <View style={[styles.gridBadge, isDisabled && styles.gridBadgeSoon]}>
+          <Text style={[styles.gridBadgeText, isDisabled && styles.gridBadgeTextSoon]}>
+            {item.badge}
+          </Text>
         </View>
       ) : null}
 
-      <View style={styles.gridIconWrap}>
-        <Ionicons name={item.icon} size={24} color={green} />
+      <View style={[styles.gridIconWrap, isDisabled && styles.gridIconWrapDisabled]}>
+        <Ionicons name={item.icon} size={24} color={isDisabled ? muted : green} />
       </View>
 
-      <Text style={styles.gridLabel} numberOfLines={2}>
+      <Text style={[styles.gridLabel, isDisabled && styles.gridLabelDisabled]} numberOfLines={2}>
         {item.label}
       </Text>
+
+      {isDisabled ? (
+        <Text style={styles.gridSoonHint} numberOfLines={2}>
+          Bientôt disponible
+        </Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -658,70 +717,177 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  quickActionsRow: {
-    flexDirection: 'row',
-    gap: 14,
-    marginBottom: 22,
-  },
-
-  quickCard: {
-    flex: 1,
-    height: 196,
+  primaryHeroCard: {
+    height: 258,
     borderRadius: radiusLg,
     overflow: 'hidden',
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
+    borderColor: 'rgba(201,162,39,0.22)',
     ...cardShadow,
   },
 
-  quickImage: {
+  primaryHeroImage: {
     flex: 1,
   },
 
-  quickImageStyle: {
+  primaryHeroImageStyle: {
     borderRadius: radiusLg,
   },
 
-  quickGradient: {
+  primaryHeroGradient: {
     flex: 1,
     justifyContent: 'flex-end',
-    padding: 16,
+    padding: 22,
   },
 
-  quickGlowOrb: {
+  primaryHeroGlowOrb: {
     position: 'absolute',
-    top: 18,
-    right: 18,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: glow,
+    top: 20,
+    right: 20,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(201,162,39,0.12)',
   },
 
-  quickFooter: {
+  primaryHeroContent: {
+    gap: 6,
+  },
+
+  primaryHeroPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(201,162,39,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(201,162,39,0.38)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 4,
+  },
+
+  primaryHeroPillText: {
+    color: gold,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.9,
+  },
+
+  primaryHeroTitleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-end',
+    maxWidth: '92%',
+  },
+
+  primaryHeroTitle: {
+    color: '#FFF',
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 30,
+  },
+
+  primaryHeroTitleAccent: {
+    color: green,
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 30,
+  },
+
+  primaryHeroAccentLine: {
+    width: 32,
+    height: 1,
+    borderRadius: 1,
+    backgroundColor: gold,
+    opacity: 0.6,
+    marginTop: 2,
+    marginBottom: 2,
+  },
+
+  primaryHeroSubtitle: {
+    color: 'rgba(255,255,255,0.74)',
+    fontSize: 13,
+    lineHeight: 19,
+    maxWidth: '90%',
+    fontWeight: '500',
+  },
+
+  primaryHeroFooter: {
+    marginTop: 10,
+  },
+
+  primaryHeroCta: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 999,
+    backgroundColor: green,
+  },
+
+  primaryHeroCtaText: {
+    color: '#111',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
+  compactQuickRow: {
+    flexDirection: 'row',
+    gap: 14,
+    marginBottom: 24,
+  },
+
+  compactQuickCard: {
+    flex: 1,
+    height: 148,
+    borderRadius: radiusMd,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    ...cardShadow,
+  },
+
+  compactQuickImage: {
+    flex: 1,
+  },
+
+  compactQuickImageStyle: {
+    borderRadius: radiusMd,
+  },
+
+  compactQuickGradient: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 14,
+  },
+
+  compactQuickFooter: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 10,
+    gap: 8,
   },
 
-  quickTitle: {
+  compactQuickTitle: {
     color: '#FFF',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '900',
-    lineHeight: 20,
+    lineHeight: 17,
   },
 
-  quickSubtitle: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 11,
-    marginTop: 4,
+  compactQuickSubtitle: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 10,
+    marginTop: 3,
     fontWeight: '600',
+    lineHeight: 13,
   },
 
-  quickArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  compactQuickArrow: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: green,
     justifyContent: 'center',
     alignItems: 'center',
@@ -730,112 +896,6 @@ const styles = StyleSheet.create({
   pressedScale: {
     opacity: 0.94,
     transform: [{ scale: 0.985 }],
-  },
-
-  discoverCard: {
-    height: 250,
-    borderRadius: radiusLg,
-    overflow: 'hidden',
-    marginBottom: 28,
-    backgroundColor: card,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    ...cardShadow,
-  },
-
-  discoverImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
-  },
-
-  discoverGradient: {
-    ...StyleSheet.absoluteFillObject,
-  },
-
-  discoverContent: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    padding: 22,
-    zIndex: 2,
-  },
-
-  discoverPill: {
-    alignSelf: 'flex-start',
-    backgroundColor: glow,
-    borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.35)',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginBottom: 12,
-  },
-
-  discoverPillText: {
-    color: green,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.8,
-  },
-
-  discoverTitle: {
-    color: '#FFF',
-    fontSize: 24,
-    fontWeight: '900',
-    lineHeight: 30,
-    maxWidth: '88%',
-  },
-
-  discoverAccent: {
-    color: green,
-  },
-
-  discoverDesc: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
-    maxWidth: '85%',
-    fontWeight: '500',
-  },
-
-  discoverCta: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 999,
-    backgroundColor: green,
-  },
-
-  discoverCtaText: {
-    color: '#111',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-
-  discoverDots: {
-    position: 'absolute',
-    bottom: 18,
-    right: 22,
-    flexDirection: 'row',
-    gap: 6,
-    zIndex: 3,
-  },
-
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-  },
-
-  dotActive: {
-    width: 18,
-    backgroundColor: green,
   },
 
   sectionHeader: {
@@ -887,6 +947,11 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
 
+  gridCardDisabled: {
+    opacity: 0.62,
+    borderColor: 'rgba(255,255,255,0.03)',
+  },
+
   gridBadge: {
     position: 'absolute',
     top: 6,
@@ -898,10 +963,21 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
 
+  gridBadgeSoon: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+
   gridBadgeText: {
     color: '#111',
     fontSize: 7,
     fontWeight: '900',
+  },
+
+  gridBadgeTextSoon: {
+    color: muted,
+    fontSize: 6,
   },
 
   gridIconWrap: {
@@ -916,12 +992,30 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
+  gridIconWrapDisabled: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+
   gridLabel: {
     color: '#FFF',
     fontSize: 10,
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 13,
+  },
+
+  gridLabelDisabled: {
+    color: 'rgba(255,255,255,0.55)',
+  },
+
+  gridSoonHint: {
+    color: muted,
+    fontSize: 7,
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: 9,
+    marginTop: 4,
   },
 
   guideCard: {

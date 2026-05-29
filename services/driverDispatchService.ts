@@ -5,7 +5,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/firebase/firestore';
 import {
+  getDriverLiveStateAfterRideTransition,
   hasAssignedDriverId,
+  isScheduledManagedRide,
   normalizeRideStatus,
   type DriverAvailability,
 } from '@/types/driver';
@@ -156,11 +158,16 @@ export async function assignRideToDriver(input: AssignRideInput): Promise<void> 
         );
       }
 
-      if (hasAssignedDriverId(ride.driverId)) {
+      const scheduledManaged = isScheduledManagedRide(ride);
+
+      if (hasAssignedDriverId(ride.driverId) && status !== 'À attribuer') {
         throw new DriverDispatchError('ride_already_assigned', 'Cette course possède déjà un chauffeur.');
       }
 
-      if (status !== 'En attente') {
+      const canAssignImmediate = status === 'En attente';
+      const canAssignScheduled = scheduledManaged && status === 'À attribuer';
+
+      if (!canAssignImmediate && !canAssignScheduled) {
         throw new DriverDispatchError(
           'ride_not_available',
           `Impossible d'attribuer une course au statut ${status}.`,
@@ -181,9 +188,12 @@ export async function assignRideToDriver(input: AssignRideInput): Promise<void> 
       }
 
       const dispatchAttempt = Number(ride.dispatchAttempt || 0) + 1;
+      const nextStatus = canAssignScheduled
+        ? 'En attente confirmation chauffeur'
+        : 'Attribuée';
 
       transaction.update(rideRef, {
-        status: 'Attribuée',
+        status: nextStatus,
         driverId: input.driverId,
         driverName: input.driverName,
         driverPhone: input.driverPhone,
@@ -195,18 +205,33 @@ export async function assignRideToDriver(input: AssignRideInput): Promise<void> 
         updatedAt: serverTimestamp(),
       });
 
-      transaction.set(
-        liveRef,
-        {
-          driverId: input.driverId,
-          driverName: input.driverName,
-          isBusy: true,
-          currentRideId: input.rideId,
-          availability: 'pending_accept',
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
+      if (canAssignScheduled) {
+        transaction.set(
+          liveRef,
+          {
+            driverId: input.driverId,
+            driverName: input.driverName,
+            isBusy: false,
+            currentRideId: '',
+            availability: 'available',
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      } else {
+        transaction.set(
+          liveRef,
+          {
+            driverId: input.driverId,
+            driverName: input.driverName,
+            isBusy: true,
+            currentRideId: input.rideId,
+            availability: 'pending_accept',
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      }
     });
 
     devLog('[DISPATCH] assign success', {
@@ -238,7 +263,13 @@ export type AcceptRideInput = {
 
 const RIDE_ALREADY_TAKEN_MESSAGE = 'Cette course a déjà été prise.';
 
-const TAKEN_RIDE_STATUSES = new Set(['Acceptée', 'En route', 'Arrivé', 'Terminée']);
+const TAKEN_RIDE_STATUSES = new Set([
+  'Acceptée',
+  'Chauffeur confirmé',
+  'En route',
+  'Arrivé',
+  'Terminée',
+]);
 
 export async function acceptRide(
   input: AcceptRideInput,
@@ -277,6 +308,43 @@ export async function acceptRide(
           'driver_busy',
           'Vous avez déjà une course active.',
         );
+      }
+
+      if (status === 'En attente confirmation chauffeur') {
+        if (assignedDriverId !== input.driverUid) {
+          throw new DriverDispatchError('ride_already_taken', RIDE_ALREADY_TAKEN_MESSAGE);
+        }
+
+        transaction.update(rideRef, {
+          status: 'Chauffeur confirmé',
+          driverId: input.driverUid,
+          acceptedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        const confirmedRide = {
+          ...ride,
+          status: 'Chauffeur confirmé',
+        };
+        const liveState = getDriverLiveStateAfterRideTransition(
+          Boolean(liveData?.isOnline),
+          'Chauffeur confirmé',
+          input.rideId,
+          confirmedRide,
+        );
+
+        transaction.set(
+          liveRef,
+          {
+            driverId: input.driverUid,
+            driverName: input.driverName,
+            ...liveState,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+
+        return 'assigned_accept' as const;
       }
 
       if (status === 'Attribuée') {

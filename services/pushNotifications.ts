@@ -1,11 +1,13 @@
-import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
+import { appConfig } from '@/config/appConfig';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { Platform } from 'react-native';
 import { db } from '@/firebase/firestore';
 import type { UserRole } from '@/firebase/types';
 import { collectionForRole } from '@/services/authUtils';
 import { logger } from '@/services/logger';
+import { devWarn } from '@/utils/devLog';
 
 export type PushPermissionStatus = Notifications.PermissionStatus | 'unsupported';
 
@@ -14,10 +16,7 @@ export function isPushSupportedPlatform() {
 }
 
 function resolveExpoProjectId() {
-  return (
-    Constants.expoConfig?.extra?.eas?.projectId ??
-    Constants.easConfig?.projectId
-  );
+  return appConfig.expo.easProjectId;
 }
 
 async function ensureAndroidNotificationChannel() {
