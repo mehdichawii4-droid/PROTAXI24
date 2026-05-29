@@ -11,6 +11,7 @@ import {
   Animated,
   KeyboardAvoidingView,
   LayoutAnimation,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -22,7 +23,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ExperiencesPrivateHero from '@/components/ExperiencesPrivateHero';
 import ScheduleRideModal, {
@@ -40,9 +41,10 @@ import {
   EXPERIENCES_V1,
   FORMULA_GROUP_PERKS,
   FORMULA_PRIVATE_PERKS,
-  formatExperienceCardInclusLine,
   formatSelectedOptions,
+  getExperienceCardInclusPreview,
   getExperienceSiteBadgeLabel,
+  hasMoreExperiencePlaces,
   getExperienceV1,
   GROUP_FORMULA_LABEL,
   PRIVATE_FORMULA_LABEL,
@@ -146,6 +148,59 @@ function ExperienceIdentityPill({ experience }: { experience: ExperienceV1 }) {
         {experience.identityBadge}
       </Text>
     </View>
+  );
+}
+
+function ExperiencePlacesModal({
+  experience,
+  onClose,
+}: {
+  experience: ExperienceV1 | null;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal
+      visible={experience != null}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.placesModalRoot}>
+        <Pressable style={styles.placesModalBackdrop} onPress={onClose} accessibilityRole="button" />
+        {experience ? (
+          <View
+            style={[styles.placesModalSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}
+          >
+            <Text style={styles.placesModalTitle}>{experience.title}</Text>
+            <Text style={styles.placesModalBadge}>{getExperienceSiteBadgeLabel(experience)}</Text>
+            <ScrollView
+              style={styles.placesModalScroll}
+              contentContainerStyle={styles.placesModalScrollContent}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
+              {experience.cardInclus.map((label, index) => (
+                <Text
+                  key={`${experience.id}-place-${index}`}
+                  style={styles.placesModalItem}
+                >
+                  • {label}
+                </Text>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.placesModalCloseBtn}
+              activeOpacity={0.9}
+              onPress={onClose}
+            >
+              <Text style={styles.placesModalCloseText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+    </Modal>
   );
 }
 
@@ -297,6 +352,7 @@ export default function ExperiencesPrivateScreen() {
   const [experienceId, setExperienceId] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
+  const [placesModalExperience, setPlacesModalExperience] = useState<ExperienceV1 | null>(null);
   const [participants, setParticipants] = useState(2);
   const [notes, setNotes] = useState('');
   const [selectedOptions, setSelectedOptions] = useState<
@@ -536,7 +592,7 @@ export default function ExperiencesPrivateScreen() {
                           <View style={styles.skuTextCol}>
                             <Text style={styles.skuTitle}>{item.title}</Text>
                             <ExperienceIdentityPill experience={item} />
-                            <Text style={styles.skuHook} numberOfLines={2}>
+                            <Text style={styles.skuHook} numberOfLines={3}>
                               {item.hook}
                             </Text>
                             <Text style={styles.skuSiteCount}>
@@ -545,9 +601,26 @@ export default function ExperiencesPrivateScreen() {
                             <Text style={styles.skuInclusLabel}>
                               Inclus dans l&apos;expérience
                             </Text>
-                            <Text style={styles.skuInclusLine}>
-                              {formatExperienceCardInclusLine(item)}
-                            </Text>
+                            <View style={styles.skuInclusList}>
+                              {getExperienceCardInclusPreview(item).map((label, index) => (
+                                <Text
+                                  key={`${item.id}-inclus-${index}`}
+                                  style={styles.skuInclusItem}
+                                >
+                                  • {label}
+                                </Text>
+                              ))}
+                              {hasMoreExperiencePlaces(item) ? (
+                                <Pressable
+                                  onPress={() => setPlacesModalExperience(item)}
+                                  hitSlop={10}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Voir tous les lieux de ${item.title}`}
+                                >
+                                  <Text style={styles.skuInclusMore}>Voir tous les lieux</Text>
+                                </Pressable>
+                              ) : null}
+                            </View>
                             <Text style={styles.skuMeta}>{item.duration}</Text>
                             <Text style={styles.skuGuide}>
                               👨‍🏫 {item.guideAvailability}
@@ -751,6 +824,11 @@ export default function ExperiencesPrivateScreen() {
             setScheduleModalVisible(false);
           }}
         />
+
+        <ExperiencePlacesModal
+          experience={placesModalExperience}
+          onClose={() => setPlacesModalExperience(null)}
+        />
       </SafeAreaView>
     </>
   );
@@ -911,7 +989,7 @@ const styles = StyleSheet.create({
   skuIdentityTextGold: { color: gold },
   skuIdentityTextGreen: { color: green },
   skuIdentityTextNeutral: { color: '#E8E8E8' },
-  skuHook: { color: '#E8E8E8', fontSize: 12, lineHeight: 17, marginTop: 4 },
+  skuHook: { color: '#E8E8E8', fontSize: 12, lineHeight: 18, marginTop: 4 },
   skuSiteCount: { color: green, fontSize: 11, fontWeight: '700', marginTop: 4 },
   skuInclusLabel: {
     color: muted,
@@ -921,7 +999,9 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textTransform: 'uppercase',
   },
-  skuInclusLine: { color: '#C8C8C8', fontSize: 10, lineHeight: 14, marginTop: 3 },
+  skuInclusList: { marginTop: 3, gap: 2 },
+  skuInclusItem: { color: '#C8C8C8', fontSize: 10, lineHeight: 15 },
+  skuInclusMore: { color: gold, fontSize: 10, fontWeight: '700', marginTop: 4 },
   skuMeta: { color: green, fontSize: 11, fontWeight: '700', marginTop: 6 },
   skuGuide: { color: gold, fontSize: 10, fontWeight: '600', marginTop: 4 },
   scheduleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -1023,4 +1103,36 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   bookBtnText: { color: '#050505', fontSize: 16, fontWeight: '800' },
+  placesModalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  placesModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+  },
+  placesModalSheet: {
+    backgroundColor: '#141414',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: 'rgba(255,255,255,0.1)',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    maxHeight: '70%',
+  },
+  placesModalTitle: { color: '#FFF', fontSize: 18, fontWeight: '800' },
+  placesModalBadge: { color: green, fontSize: 12, fontWeight: '700', marginTop: 6 },
+  placesModalScroll: { marginTop: 14, maxHeight: 280 },
+  placesModalScrollContent: { gap: 8, paddingBottom: 8 },
+  placesModalItem: { color: '#E0E0E0', fontSize: 14, lineHeight: 20 },
+  placesModalCloseBtn: {
+    backgroundColor: green,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  placesModalCloseText: { color: '#050505', fontSize: 15, fontWeight: '800' },
 });
