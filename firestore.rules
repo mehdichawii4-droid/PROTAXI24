@@ -30,12 +30,29 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/partners/$(request.auth.uid)).data;
     }
 
-    function isPartnerActive() {
+    // Legacy V1 : pas de champ status — isActive fait foi (comportement inchangé).
+    function isPartnerLegacyActive() {
       return isPartner()
+        && !('status' in partnerProfile())
         && (
           !('isActive' in partnerProfile())
           || partnerProfile().isActive != false
         );
+    }
+
+    // Phase 2 : status présent — réservations seulement si active + isActive cohérent.
+    function isPartnerStatusActive() {
+      return isPartner()
+        && ('status' in partnerProfile())
+        && partnerProfile().status == 'active'
+        && (
+          !('isActive' in partnerProfile())
+          || partnerProfile().isActive != false
+        );
+    }
+
+    function isPartnerActive() {
+      return isPartnerLegacyActive() || isPartnerStatusActive();
     }
 
     function isPartnerRideOwner(data) {
@@ -108,13 +125,120 @@ service cloud.firestore {
       return isAdmin()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'isActive',
+          'status',
           'updatedAt',
           'contactName',
           'phone',
           'email',
           'companyName',
           'partnerType',
-        ]);
+          'validatedAt',
+          'validatedBy',
+          'internalNotes',
+        ])
+        && isPartnerActiveWithValidation(request.resource.data);
+    }
+
+    // -------------------------------------------------------------------------
+    // Partenaires PROTAXI — partners/{partnerId} (partnerId === auth.uid)
+    // Hotel Partner Phase 2 — auto-inscription hôtel (partnerType == hotel)
+    // -------------------------------------------------------------------------
+
+    function isPartnerOwner(partnerId) {
+      return isSignedIn() && request.auth.uid == partnerId;
+    }
+
+    function isValidPartnerStatus(status) {
+      return status in ['draft', 'pending_review', 'active', 'suspended'];
+    }
+
+    function hasValidPartnerOptionalFields(data) {
+      return (!('address' in data) || (data.address is string && data.address.size() > 0))
+        && (!('city' in data) || (data.city is string && data.city.size() > 0))
+        && (!('postalCode' in data) || (data.postalCode is string && data.postalCode.size() > 0))
+        && (!('receptionPhone' in data) || (data.receptionPhone is string && data.receptionPhone.size() > 0))
+        && (!('website' in data) || (data.website is string && data.website.size() > 0))
+        && (!('isOnline' in data) || data.isOnline is bool)
+        && (!('expoPushToken' in data) || (data.expoPushToken is string && data.expoPushToken.size() > 0))
+        && (!('expoPushTokenUpdatedAt' in data) || data.expoPushTokenUpdatedAt is timestamp)
+        && (!('pushTokenRole' in data) || (data.pushTokenRole is string && data.pushTokenRole.size() > 0))
+        && (!('internalNotes' in data) || data.internalNotes is string)
+        && (!('validatedAt' in data) || data.validatedAt is timestamp)
+        && (!('validatedBy' in data) || (data.validatedBy is string && data.validatedBy.size() > 0));
+    }
+
+    function isValidPartnerCoreFields(data) {
+      return data.uid is string
+        && data.uid.size() > 0
+        && data.companyName is string
+        && data.companyName.size() > 0
+        && data.partnerType is string
+        && data.partnerType == 'hotel'
+        && data.contactName is string
+        && data.contactName.size() > 0
+        && data.phone is string
+        && data.phone.size() > 0
+        && data.email is string
+        && data.email.size() > 0
+        && data.isActive is bool
+        && isValidPartnerStatus(data.status)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && hasValidPartnerOptionalFields(data);
+    }
+
+    function isPartnerActiveWithValidation(data) {
+      return !('status' in data)
+        || data.status != 'active'
+        || (data.validatedAt is timestamp
+          && data.validatedBy is string
+          && data.validatedBy.size() > 0);
+    }
+
+    function hasNoPartnerAdminOnlyFieldsOnCreate(data) {
+      return !('internalNotes' in data)
+        && !('validatedAt' in data)
+        && !('validatedBy' in data);
+    }
+
+    function isPartnerSelfProtectedAdminFieldsUnchanged() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return (!('internalNotes' in existing)
+          || ('internalNotes' in data) && data.internalNotes == existing.internalNotes)
+        && (!('validatedAt' in existing)
+          || ('validatedAt' in data) && data.validatedAt == existing.validatedAt)
+        && (!('validatedBy' in existing)
+          || ('validatedBy' in data) && data.validatedBy == existing.validatedBy);
+    }
+
+    // Inscription hôtel autonome — statut initial pending_review, isActive false (dual-write).
+    function isPartnerSelfCreate(partnerId) {
+      let data = request.resource.data;
+      return isPartnerOwner(partnerId)
+        && partnerId == data.uid
+        && isValidPartnerCoreFields(data)
+        && isPartnerActiveWithValidation(data)
+        && data.status == 'pending_review'
+        && data.isActive == false
+        && hasNoPartnerAdminOnlyFieldsOnCreate(data);
+    }
+
+    // Mise à jour profil hôtel — uniquement draft / pending_review, jamais active / suspended.
+    function isPartnerSelfUpdate(partnerId) {
+      let data = request.resource.data;
+      return isPartnerOwner(partnerId)
+        && partnerId == data.uid
+        && resource.data.uid == partnerId
+        && data.uid == resource.data.uid
+        && resource.data.partnerType == 'hotel'
+        && data.partnerType == 'hotel'
+        && resource.data.status in ['draft', 'pending_review']
+        && data.status in ['draft', 'pending_review']
+        && data.isActive == false
+        && isValidPartnerCoreFields(data)
+        && isPartnerActiveWithValidation(data)
+        && isPartnerSelfProtectedAdminFieldsUnchanged();
     }
 
     // -------------------------------------------------------------------------
@@ -886,12 +1010,15 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (request.auth != null && request.auth.uid == partnerId);
 
-      // Création complète réservée admin ; bootstrap online minimal autorisé au propriétaire.
-      allow create: if isAdmin() || isPartnerOwnerOnlineCreate(partnerId);
+      // Admin, bootstrap online minimal, ou inscription hôtel autonome (Phase 2).
+      allow create: if isAdmin()
+        || isPartnerOwnerOnlineCreate(partnerId)
+        || isPartnerSelfCreate(partnerId);
 
       allow update: if isAdminPartnerStatusUpdate()
         || isPartnerOwnerOnlineUpdate(partnerId)
-        || isPartnerSelfProfileUpdate(partnerId);
+        || isPartnerSelfProfileUpdate(partnerId)
+        || isPartnerSelfUpdate(partnerId);
 
       allow delete: if false;
     }
