@@ -1,0 +1,103 @@
+import type {
+  GuideExperienceId,
+  GuideSpecialty,
+  GuideStatus,
+  GuideYearsExperience,
+} from '@/firebase/types';
+
+export type GuideErrorCode =
+  | 'GUIDE_ID_REQUIRED'
+  | 'GUIDE_NOT_FOUND'
+  | 'GUIDE_ALREADY_EXISTS'
+  | 'GUIDE_VALIDATION_FAILED'
+  | 'GUIDE_STATUS_TRANSITION_INVALID'
+  | 'GUIDE_NOT_ASSIGNABLE'
+  | 'EXPERIENCE_NOT_RESOLVED'
+  | 'BOOKING_NOT_FOUND'
+  | 'BOOKING_GUIDE_NOT_REQUESTED'
+  | 'BOOKING_NOT_EXPERIENCES_PRIVATE'
+  | 'GUIDE_EXPERIENCE_NOT_ALLOWED'
+  | 'FIRESTORE_PERMISSION_DENIED'
+  | 'FIRESTORE_WRITE_FAILED';
+
+export type GuideFieldError = {
+  field: string;
+  message: string;
+};
+
+export type GuideValidationResult = {
+  ok: boolean;
+  errors: GuideFieldError[];
+};
+
+export type GuideFormInput = {
+  guideUid: string;
+  displayName: string;
+  phone: string;
+  email: string;
+  bio: string;
+  languages: string[];
+  specialties: GuideSpecialty[];
+  yearsExperience: GuideYearsExperience;
+  allowedExperienceIds: GuideExperienceId[];
+  photoUrl?: string;
+  internalNotes?: string;
+  status?: GuideStatus;
+};
+
+export type AdminGuideListItem = {
+  uid: string;
+  displayName: string;
+  phone: string;
+  email: string;
+  status: GuideStatus;
+  statusLabel: string;
+  specialtiesSummary: string;
+  allowedExperienceCount: number;
+  yearsExperience: GuideYearsExperience;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  validatedAt?: unknown;
+};
+
+export type AdminGuideDetail = AdminGuideListItem & {
+  bio: string;
+  languages: string[];
+  specialties: GuideSpecialty[];
+  allowedExperienceIds: GuideExperienceId[];
+  photoUrl?: string;
+  internalNotes?: string;
+  validatedBy?: string;
+};
+
+export type AssignableGuideOption = {
+  uid: string;
+  displayName: string;
+  phone: string;
+  specialtiesSummary: string;
+};
+
+export type AssignGuideResult = {
+  bookingId: string;
+  assignedGuideId: string;
+  assignedGuideName: string;
+};
+
+export class GuideServiceError extends Error {
+  code: GuideErrorCode;
+  fieldErrors?: GuideFieldError[];
+
+  constructor(
+    code: GuideErrorCode,
+    message: string,
+    options?: { fieldErrors?: GuideFieldError[]; cause?: unknown },
+  ) {
+    super(message);
+    this.name = 'GuideServiceError';
+    this.code = code;
+    this.fieldErrors = options?.fieldErrors;
+    if (options?.cause) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
