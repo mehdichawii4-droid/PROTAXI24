@@ -9,6 +9,8 @@ export const ROLE_HOME_ROUTES: Record<UserRole, string> = {
   driver: '/drivers-dashboard',
   admin: '/admin-dashboard',
   partner: '/partner-dashboard',
+  /** Pas d’app guide en P1 — placeholder pour P2 (registre guides/{uid}). */
+  guide: '/',
 };
 
 export const CLIENT_BLOCKED_ROUTES = new Set([
@@ -17,6 +19,8 @@ export const CLIENT_BLOCKED_ROUTES = new Set([
   'admin-demo',
   'admin-partners',
   'admin-partner-details',
+  'admin-guides',
+  'admin-guide-details',
   'driver-profile',
   'tour-staff-dashboard',
   'partner-dashboard',
@@ -35,6 +39,8 @@ export const ADMIN_ROUTES = new Set([
   'admin-demo',
   'admin-partners',
   'admin-partner-details',
+  'admin-guides',
+  'admin-guide-details',
   'driver-profile',
   'tour-staff-dashboard',
 ]);
@@ -79,6 +85,10 @@ export const canAccessRoute = (
 
   if (role === 'partner') {
     return PARTNER_ROUTES.has(routeKey);
+  }
+
+  if (role === 'guide') {
+    return false;
   }
 
   return false;

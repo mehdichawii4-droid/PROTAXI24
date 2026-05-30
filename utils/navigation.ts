@@ -18,6 +18,8 @@ export const PROTAXI_ROUTES = {
   partnerNewBooking: '/partner-new-booking',
   adminPartners: '/admin-partners',
   adminPartnerDetails: '/admin-partner-details',
+  adminGuides: '/admin-guides',
+  adminGuideDetails: '/admin-guide-details',
   menu: '/menu',
   reservation: '/reservation',
   history: '/history',

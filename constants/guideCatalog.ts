@@ -83,3 +83,14 @@ export function isGuideStatus(value: string): value is GuideStatus {
 export function getGuideSpecialtyLabel(id: GuideSpecialty): string {
   return GUIDE_SPECIALTY_DEFS.find((item) => item.id === id)?.label ?? id;
 }
+
+/** Libellés expériences pour multi-select admin (titre client → id). */
+export function getGuideExperiencePickerOptions(): readonly {
+  id: GuideExperienceId;
+  label: string;
+}[] {
+  return Object.entries(CIRCUIT_NAME_TO_EXPERIENCE_ID).map(([label, id]) => ({
+    id,
+    label,
+  }));
+}
