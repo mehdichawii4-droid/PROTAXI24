@@ -1,10 +1,18 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -13,6 +21,8 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import {
   GUIDE_SPECIALTY_DEFS,
@@ -50,6 +60,15 @@ const BIO_MAX = 300;
 const MAX_SPECIALTIES = 3;
 
 const EXPERIENCE_OPTIONS = getGuideExperiencePickerOptions();
+
+/** Alert.alert multi-boutons non fiable sur React Native Web — confirmation native navigateur. */
+function showAppAlert(title: string, message?: string) {
+  if (Platform.OS === 'web') {
+    window.alert(message ? `${title}\n\n${message}` : title);
+    return;
+  }
+  Alert.alert(title, message ?? '');
+}
 
 function normalizeParam(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] ?? '';
@@ -111,8 +130,8 @@ export default function AdminGuideDetailsScreen() {
   const guideId = normalizeParam(params.id);
   const isCreateMode = normalizeParam(params.mode) === 'create';
 
-  const { user } = useAuth();
-  const adminUid = user?.uid ?? '';
+  const { user, profile } = useAuth();
+  const adminUid = user?.uid ?? profile?.uid ?? '';
 
   const [detail, setDetail] = useState<AdminGuideDetail | null>(null);
   const [form, setForm] = useState<GuideFormInput>(emptyForm());
@@ -172,7 +191,7 @@ export default function AdminGuideDetailsScreen() {
         };
       }
       if (current.specialties.length >= MAX_SPECIALTIES) {
-        Alert.alert('Spécialités', `Maximum ${MAX_SPECIALTIES} spécialités par guide.`);
+        showAppAlert('Spécialités', `Maximum ${MAX_SPECIALTIES} spécialités par guide.`);
         return current;
       }
       return { ...current, specialties: [...current.specialties, id] };
@@ -238,7 +257,7 @@ export default function AdminGuideDetailsScreen() {
           ...input,
           status: 'pending_review',
         });
-        Alert.alert('Guide créé', 'Le profil guide a été enregistré.');
+        showAppAlert('Guide créé', 'Le profil guide a été enregistré.');
         router.replace({
           pathname: '/admin-guide-details',
           params: { id: created.uid },
@@ -248,9 +267,9 @@ export default function AdminGuideDetailsScreen() {
 
       await updateGuideProfile(input);
       await loadGuide();
-      Alert.alert('Enregistré', 'Le profil guide a été mis à jour.');
+      showAppAlert('Enregistré', 'Le profil guide a été mis à jour.');
     } catch (error) {
-      Alert.alert('Erreur', getGuideAssignErrorMessage(error));
+      showAppAlert('Erreur', getGuideAssignErrorMessage(error));
     } finally {
       setSaving(false);
     }
@@ -262,9 +281,9 @@ export default function AdminGuideDetailsScreen() {
       try {
         await action();
         await loadGuide();
-        Alert.alert(label, 'Statut mis à jour.');
+        showAppAlert(label, 'Statut mis à jour.');
       } catch (error) {
-        Alert.alert('Erreur', getGuideAssignErrorMessage(error));
+        showAppAlert('Erreur', getGuideAssignErrorMessage(error));
       } finally {
         setStatusUpdating(false);
       }
@@ -272,15 +291,34 @@ export default function AdminGuideDetailsScreen() {
     [loadGuide],
   );
 
-  const confirmAction = useCallback(
-    (title: string, message: string, onConfirm: () => void) => {
-      Alert.alert(title, message, [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Confirmer', onPress: onConfirm },
-      ]);
-    },
-    [],
-  );
+  const confirmAction = useCallback((title: string, message: string, onConfirm: () => void) => {
+    console.log('[ADMIN GUIDES] confirmAction called', { title, platform: Platform.OS });
+
+    if (Platform.OS === 'web') {
+      console.log('[ADMIN GUIDES] confirmAction before window.confirm');
+      const accepted = window.confirm(
+        message.trim() ? `${title}\n\n${message}` : title,
+      );
+      console.log('[ADMIN GUIDES] confirmAction web result', { accepted });
+      if (accepted) {
+        console.log('[ADMIN GUIDES] confirmAction onConfirm firing (web)');
+        onConfirm();
+      }
+      return;
+    }
+
+    console.log('[ADMIN GUIDES] confirmAction before Alert.alert');
+    Alert.alert(title, message, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Confirmer',
+        onPress: () => {
+          console.log('[ADMIN GUIDES] confirmAction Confirmer pressed');
+          onConfirm();
+        },
+      },
+    ]);
+  }, []);
 
   const statusLabel = useMemo(() => {
     if (isCreateMode) return 'Nouveau profil';
@@ -317,7 +355,11 @@ export default function AdminGuideDetailsScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#FFF" />
         </TouchableOpacity>
@@ -576,84 +618,128 @@ export default function AdminGuideDetailsScreen() {
             <Text style={styles.sectionTitle}>Actions statut</Text>
 
             {detail.status === 'draft' ? (
-              <TouchableOpacity
-                style={[styles.outlineBtn, statusUpdating && styles.btnDisabled]}
-                disabled={statusUpdating || saving}
-                onPress={() =>
+              <StatusActionPressable
+                label="Soumettre pour validation"
+                variant="outline"
+                isDisabled={statusUpdating || saving}
+                onPress={() => {
+                  console.log('[ADMIN GUIDES] submit review button pressed', {
+                    adminUid,
+                    saving,
+                    statusUpdating,
+                  });
+                  if (statusUpdating || saving) return;
                   confirmAction(
                     'Soumettre pour validation',
                     `Envoyer le profil de ${detail.displayName} en validation ?`,
                     () => void runStatusAction('Soumis', () => submitGuideForReview(detail.uid)),
-                  )
-                }
-              >
-                <Text style={styles.outlineBtnText}>Soumettre pour validation</Text>
-              </TouchableOpacity>
+                  );
+                }}
+              />
             ) : null}
 
             {detail.status === 'pending_review' ? (
               <>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, statusUpdating && styles.btnDisabled]}
-                  disabled={statusUpdating || saving || !adminUid}
-                  onPress={() =>
+                <StatusActionPressable
+                  label="Valider le guide"
+                  variant="primary"
+                  isDisabled={statusUpdating || saving || !adminUid}
+                  onPress={() => {
+                    console.log('[ADMIN GUIDES] validate button pressed', {
+                      adminUid,
+                      saving,
+                      statusUpdating,
+                    });
+                    if (statusUpdating || saving) return;
+                    if (!adminUid) {
+                      showAppAlert(
+                        'Session',
+                        'Identifiant administrateur indisponible. Reconnectez-vous.',
+                      );
+                      return;
+                    }
                     confirmAction(
                       'Valider le guide',
                       `Certifier ${detail.displayName} comme guide PROTAXI actif ?`,
-                      () => void runStatusAction('Guide validé', () => validateGuide(detail.uid, adminUid)),
-                    )
-                  }
-                >
-                  <Text style={styles.primaryBtnText}>Valider le guide</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.dangerBtn, statusUpdating && styles.btnDisabled]}
-                  disabled={statusUpdating || saving}
-                  onPress={() =>
+                      () =>
+                        void runStatusAction('Guide validé', () =>
+                          validateGuide(detail.uid, adminUid),
+                        ),
+                    );
+                  }}
+                />
+                <StatusActionPressable
+                  label="Suspendre"
+                  variant="danger"
+                  isDisabled={statusUpdating || saving}
+                  onPress={() => {
+                    console.log('[ADMIN GUIDES] suspend button pressed', {
+                      adminUid,
+                      saving,
+                      statusUpdating,
+                    });
+                    if (statusUpdating || saving) return;
                     confirmAction(
                       'Suspendre',
                       `Suspendre ${detail.displayName} avant validation ?`,
                       () => void runStatusAction('Suspendu', () => suspendGuide(detail.uid)),
-                    )
-                  }
-                >
-                  <Text style={styles.dangerBtnText}>Suspendre</Text>
-                </TouchableOpacity>
+                    );
+                  }}
+                />
               </>
             ) : null}
 
             {detail.status === 'active' ? (
-              <TouchableOpacity
-                style={[styles.dangerBtn, statusUpdating && styles.btnDisabled]}
-                disabled={statusUpdating || saving}
-                onPress={() =>
+              <StatusActionPressable
+                label="Suspendre"
+                variant="danger"
+                icon="pause-circle-outline"
+                isDisabled={statusUpdating || saving}
+                onPress={() => {
+                  console.log('[ADMIN GUIDES] suspend active button pressed', {
+                    adminUid,
+                    saving,
+                    statusUpdating,
+                  });
+                  if (statusUpdating || saving) return;
                   confirmAction(
                     'Suspendre le guide',
                     `Confirmer la suspension de ${detail.displayName} ?`,
                     () => void runStatusAction('Suspendu', () => suspendGuide(detail.uid)),
-                  )
-                }
-              >
-                <Ionicons name="pause-circle-outline" size={18} color="#FFF" />
-                <Text style={styles.dangerBtnText}>Suspendre</Text>
-              </TouchableOpacity>
+                  );
+                }}
+              />
             ) : null}
 
             {detail.status === 'suspended' ? (
-              <TouchableOpacity
-                style={[styles.primaryBtn, statusUpdating && styles.btnDisabled]}
-                disabled={statusUpdating || saving || !adminUid}
-                onPress={() =>
+              <StatusActionPressable
+                label="Réactiver"
+                variant="primary"
+                isDisabled={statusUpdating || saving || !adminUid}
+                onPress={() => {
+                  console.log('[ADMIN GUIDES] reactivate button pressed', {
+                    adminUid,
+                    saving,
+                    statusUpdating,
+                  });
+                  if (statusUpdating || saving) return;
+                  if (!adminUid) {
+                    showAppAlert(
+                      'Session',
+                      'Identifiant administrateur indisponible. Reconnectez-vous.',
+                    );
+                    return;
+                  }
                   confirmAction(
                     'Réactiver le guide',
                     `Réactiver ${detail.displayName} comme guide certifié ?`,
                     () =>
-                      void runStatusAction('Réactivé', () => reactivateGuide(detail.uid, adminUid)),
-                  )
-                }
-              >
-                <Text style={styles.primaryBtnText}>Réactiver</Text>
-              </TouchableOpacity>
+                      void runStatusAction('Réactivé', () =>
+                        reactivateGuide(detail.uid, adminUid),
+                      ),
+                  );
+                }}
+              />
             ) : null}
           </View>
         ) : null}
@@ -677,6 +763,58 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={styles.infoValue}>{value}</Text>
     </View>
+  );
+}
+
+type StatusActionVariant = 'primary' | 'outline' | 'danger';
+
+function StatusActionPressable({
+  label,
+  variant,
+  isDisabled,
+  onPress,
+  icon,
+}: {
+  label: string;
+  variant: StatusActionVariant;
+  isDisabled: boolean;
+  onPress: () => void;
+  icon?: ComponentProps<typeof Ionicons>['name'];
+}) {
+  const baseStyle: StyleProp<ViewStyle> =
+    variant === 'primary'
+      ? styles.primaryBtn
+      : variant === 'outline'
+        ? styles.outlineBtn
+        : styles.dangerBtn;
+
+  const textStyle =
+    variant === 'primary'
+      ? styles.primaryBtnText
+      : variant === 'outline'
+        ? styles.outlineBtnText
+        : styles.dangerBtnText;
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isDisabled }}
+      style={({ pressed }) => [
+        baseStyle,
+        (isDisabled || pressed) && styles.btnDisabled,
+        Platform.OS === 'web' && {
+          cursor: isDisabled ? ('not-allowed' as const) : ('pointer' as const),
+        },
+      ]}
+      onPress={onPress}
+    >
+      {icon ? (
+        <Ionicons name={icon} size={18} color="#FFF" pointerEvents="none" />
+      ) : null}
+      <Text style={textStyle} pointerEvents="none">
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -836,7 +974,7 @@ const styles = StyleSheet.create({
   },
   dangerBtnText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
   btnDisabled: { opacity: 0.5 },
-  statusActions: { marginTop: 4, marginBottom: 24 },
+  statusActions: { marginTop: 4, marginBottom: 24, zIndex: 2 },
   secondaryBtn: {
     marginTop: 8,
     backgroundColor: card,
