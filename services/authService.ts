@@ -17,8 +17,14 @@ import {
   isBootstrapAdminCredentials,
 } from './authUtils';
 import { getGuideSelfErrorMessage, registerGuideProfile } from '@/services/guideSelfService';
+import {
+  getPartnerSelfErrorMessage,
+  registerPartnerProfile,
+} from '@/services/partnerSelfService';
 import { GuideServiceError } from '@/types/guide';
 import type { GuideFormInput } from '@/types/guide';
+import { PartnerServiceError } from '@/types/partner';
+import type { PartnerFormInput } from '@/types/partner';
 import {
   isLoginEmailRegistered,
   lookupLoginEmailByPhone,
@@ -198,6 +204,63 @@ export const registerGuideWithEmail = async (
     await signOut(getFirebaseAuth());
     if (error instanceof GuideServiceError) {
       throw new Error(getGuideSelfErrorMessage(error));
+    }
+    throw error;
+  }
+};
+
+export const registerHotelPartnerWithEmail = async (
+  email: string,
+  password: string,
+  partnerInput: PartnerFormInput,
+): Promise<AuthSessionUser> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (partnerInput.email.trim().toLowerCase() !== normalizedEmail) {
+    const error = new Error(
+      'L\'email du profil partenaire doit correspondre au compte.',
+    );
+    (error as Error & { code?: string }).code = 'protaxi/partner-email-mismatch';
+    throw error;
+  }
+
+  const emailAlreadyUsed = await isLoginEmailRegistered(normalizedEmail);
+  if (emailAlreadyUsed) {
+    const error = new Error(getAuthErrorMessage('auth/email-already-in-use'));
+    (error as Error & { code?: string }).code = 'auth/email-already-in-use';
+    throw error;
+  }
+
+  const credential = await createUserWithEmailAndPassword(
+    getFirebaseAuth(),
+    normalizedEmail,
+    password,
+  );
+
+  try {
+    await registerPartnerProfile(credential.user.uid, {
+      ...partnerInput,
+      partnerUid: credential.user.uid,
+      partnerType: 'hotel',
+      email: normalizedEmail,
+    });
+
+    const profile = await resolveProfileForAuthUser(
+      credential.user.uid,
+      credential.user.email,
+    );
+
+    if (!profile || profile.role !== 'partner') {
+      throw new Error(getAuthErrorMessage('protaxi/profile-not-found'));
+    }
+
+    assertProfileCanLogin(profile);
+    await markUserOnlineState(profile, true, 'authService/registerHotelPartnerWithEmail');
+    return buildSessionUser(credential.user, profile);
+  } catch (error) {
+    await signOut(getFirebaseAuth());
+    if (error instanceof PartnerServiceError) {
+      throw new Error(getPartnerSelfErrorMessage(error));
     }
     throw error;
   }

@@ -18,11 +18,15 @@ import {
   mapFirebaseAuthError,
   registerClientWithEmail,
   registerGuideWithEmail,
+  registerHotelPartnerWithEmail,
   restoreSessionUser,
 } from '@/services/authService';
 import { getGuideSelfErrorMessage } from '@/services/guideSelfService';
+import { getPartnerSelfErrorMessage } from '@/services/partnerSelfService';
 import { GuideServiceError } from '@/types/guide';
 import type { GuideFormInput } from '@/types/guide';
+import { PartnerServiceError } from '@/types/partner';
+import type { PartnerFormInput } from '@/types/partner';
 import {
   clearLocalProfileCache,
   syncLocalProfileCache,
@@ -44,6 +48,11 @@ type AuthContextValue = {
     phone: string
   ) => Promise<UserRole>;
   registerGuide: (email: string, password: string, guideInput: GuideFormInput) => Promise<UserRole>;
+  registerHotelPartner: (
+    email: string,
+    password: string,
+    partnerInput: PartnerFormInput,
+  ) => Promise<UserRole>;
   logout: () => Promise<void>;
   clearAuthError: () => void;
 };
@@ -163,6 +172,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [persistSession],
   );
 
+  const registerHotelPartner = useCallback(
+    async (email: string, password: string, partnerInput: PartnerFormInput) => {
+      setAuthError(null);
+      authOpInFlightRef.current = true;
+
+      try {
+        const sessionUser = await registerHotelPartnerWithEmail(email, password, partnerInput);
+        await persistSession(sessionUser);
+        return sessionUser.profile.role;
+      } catch (error) {
+        const message =
+          error instanceof PartnerServiceError
+            ? getPartnerSelfErrorMessage(error)
+            : mapFirebaseAuthError(error);
+        setAuthError(message);
+        throw new Error(message);
+      } finally {
+        authOpInFlightRef.current = false;
+      }
+    },
+    [persistSession],
+  );
+
   const registerClient = useCallback(
     async (fullName: string, email: string, password: string, phone: string) => {
       setAuthError(null);
@@ -213,6 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPhoneNumber,
       registerClient,
       registerGuide,
+      registerHotelPartner,
       logout,
       clearAuthError,
     }),
@@ -224,6 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPhoneNumber,
       registerClient,
       registerGuide,
+      registerHotelPartner,
       logout,
       clearAuthError,
     ]

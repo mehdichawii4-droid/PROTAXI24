@@ -8,14 +8,15 @@ import {
   setDoc,
   where,
 } from 'firebase/firestore';
-import { db, getGuideDocRef } from '@/firebase/firestore';
+import { db, getGuideDocRef, getPartnerDocRef } from '@/firebase/firestore';
 import {
   BOOTSTRAP_ADMIN_EMAIL,
   BOOTSTRAP_ADMIN_PASSWORD,
 } from '@/firebase/config';
 import { getFirebaseAuth } from '@/firebase/authInstance';
-import type { Guide, ProtaxiUserProfile, UserCollection } from '@/firebase/types';
+import type { Guide, Partner, ProtaxiUserProfile, UserCollection } from '@/firebase/types';
 import { normalizeGuideProfile } from '@/services/guideService';
+import { normalizePartnerProfile } from '@/services/partnerCoreService';
 import {
   collectionForRole,
   mapProfileData,
@@ -40,6 +41,91 @@ export function mapGuideToProtaxiProfile(guide: Guide): ProtaxiUserProfile {
     isApproved: guide.status === 'active',
     guideStatus: guide.status,
   };
+}
+
+export function mapPartnerToProtaxiProfile(partner: Partner): ProtaxiUserProfile {
+  return {
+    uid: partner.uid,
+    fullName:
+      partner.companyName.trim() ||
+      partner.contactName.trim() ||
+      'Partenaire PROTAXI',
+    phone: partner.phone,
+    email: partner.email.trim().toLowerCase(),
+    role: 'partner',
+    createdAt: partner.createdAt ?? null,
+    isOnline: false,
+    isApproved: partner.status === 'active',
+    partnerStatus: partner.status,
+    companyName: partner.companyName,
+    partnerType: partner.partnerType,
+    contactName: partner.contactName,
+  };
+}
+
+export async function fetchPartnerProfileByUid(
+  uid: string,
+): Promise<ProtaxiUserProfile | null> {
+  const snapshot = await getDoc(getPartnerDocRef(uid.trim()));
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  const partner = normalizePartnerProfile(uid, snapshot.data() as Record<string, unknown>);
+  if (!partner) {
+    return null;
+  }
+
+  return mapPartnerToProtaxiProfile(partner);
+}
+
+async function fetchPartnerProfileByEmail(email: string): Promise<ProtaxiUserProfile | null> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const snapshot = await getDocs(
+    query(collection(db, 'partners'), where('email', '==', normalizedEmail)),
+  );
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const match = snapshot.docs[0];
+  const partner = normalizePartnerProfile(match.id, match.data() as Record<string, unknown>);
+  if (!partner) {
+    return null;
+  }
+
+  return mapPartnerToProtaxiProfile(partner);
+}
+
+async function fetchPartnerProfileByPhone(phone: string): Promise<ProtaxiUserProfile | null> {
+  const normalizedPhone = normalizePhone(phone);
+  const snapshot = await getDocs(
+    query(collection(db, 'partners'), where('phone', '==', normalizedPhone)),
+  );
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const match = snapshot.docs[0];
+  const partner = normalizePartnerProfile(match.id, match.data() as Record<string, unknown>);
+  if (!partner) {
+    return null;
+  }
+
+  return mapPartnerToProtaxiProfile(partner);
+}
+
+function mapPartnerDocToProfile(
+  uid: string,
+  data: Record<string, unknown>,
+): ProtaxiUserProfile | null {
+  const partner = normalizePartnerProfile(uid, data);
+  if (!partner) {
+    return null;
+  }
+  return mapPartnerToProtaxiProfile(partner);
 }
 
 export async function fetchGuideProfileByUid(
@@ -103,6 +189,10 @@ export const fetchUserProfileByUid = async (
     const snapshot = await getDoc(doc(db, collectionName, uid));
 
     if (snapshot.exists()) {
+      if (collectionName === 'partners') {
+        return mapPartnerDocToProfile(uid, snapshot.data() as Record<string, unknown>);
+      }
+
       return mapProfileData(
         uid,
         snapshot.data() as Record<string, unknown>,
@@ -143,6 +233,10 @@ export const fetchUserProfileByEmail = async (
 
     if (!snapshot.empty) {
       const match = snapshot.docs[0];
+      if (collectionName === 'partners') {
+        return mapPartnerDocToProfile(match.id, match.data() as Record<string, unknown>);
+      }
+
       return mapProfileData(
         match.id,
         match.data() as Record<string, unknown>,
@@ -186,6 +280,10 @@ export const fetchUserProfileByPhone = async (
 
     if (!snapshot.empty) {
       const match = snapshot.docs[0];
+      if (collectionName === 'partners') {
+        return mapPartnerDocToProfile(match.id, match.data() as Record<string, unknown>);
+      }
+
       return mapProfileData(
         match.id,
         match.data() as Record<string, unknown>,

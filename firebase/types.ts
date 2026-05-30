@@ -108,6 +108,8 @@ export interface ProtaxiUserProfile {
   isApproved: boolean;
   /** Renseigné lorsque role === 'guide' (statut registre guides/{uid}). */
   guideStatus?: GuideStatus;
+  /** Renseigné lorsque role === 'partner' (statut registre partners/{uid}). */
+  partnerStatus?: PartnerStatus;
   companyName?: string;
   partnerType?: 'hotel' | 'agency' | 'transport';
   contactName?: string;
