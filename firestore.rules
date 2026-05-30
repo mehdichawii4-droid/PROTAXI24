@@ -117,6 +117,112 @@ service cloud.firestore {
         ]);
     }
 
+    // -------------------------------------------------------------------------
+    // Guides PROTAXI — guides/{guideId} (guideId === auth.uid)
+    // -------------------------------------------------------------------------
+
+    function isGuideOwner(guideId) {
+      return isSignedIn() && request.auth.uid == guideId;
+    }
+
+    function isGuide() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/guides/$(request.auth.uid));
+    }
+
+    function isValidGuideStatus(status) {
+      return status in ['draft', 'pending_review', 'active', 'suspended'];
+    }
+
+    function isValidGuideYearsExperience(value) {
+      return value in ['1-3', '4-10', '10+'];
+    }
+
+    function hasValidGuideSpecialties(specialties) {
+      return specialties is list
+        && specialties.size() >= 1
+        && specialties.size() <= 3
+        && specialties.hasOnly([
+          'patrimoine',
+          'histoire',
+          'archéologie',
+          'nature',
+          'thermal',
+          'culture_artisanat',
+        ]);
+    }
+
+    function hasValidGuideAllowedExperienceIds(ids) {
+      return ids is list
+        && ids.size() >= 1
+        && ids.hasOnly([
+          'guelma-romaine',
+          'memoire-de-guelma',
+          'traces-civilisations',
+          'nature-maouna',
+          'hammam-debagh-signature',
+          'route-thermale-premium',
+        ]);
+    }
+
+    function isValidGuideBio(bio) {
+      return bio is string && bio.size() >= 50 && bio.size() <= 300;
+    }
+
+    function hasValidGuideOptionalFields(data) {
+      return (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() > 0))
+        && (!('internalNotes' in data) || data.internalNotes is string)
+        && (!('validatedAt' in data) || data.validatedAt is timestamp)
+        && (!('validatedBy' in data) || (data.validatedBy is string && data.validatedBy.size() > 0));
+    }
+
+    function isValidGuideCoreFields(data) {
+      return data.uid is string
+        && data.uid.size() > 0
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.phone is string
+        && data.phone.size() > 0
+        && data.email is string
+        && data.email.size() > 0
+        && isValidGuideBio(data.bio)
+        && data.languages is list
+        && data.languages.size() >= 1
+        && hasValidGuideSpecialties(data.specialties)
+        && isValidGuideYearsExperience(data.yearsExperience)
+        && hasValidGuideAllowedExperienceIds(data.allowedExperienceIds)
+        && isValidGuideStatus(data.status)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && hasValidGuideOptionalFields(data);
+    }
+
+    function isGuideActiveWithValidation(data) {
+      return data.status != 'active'
+        || (data.validatedAt is timestamp
+          && data.validatedBy is string
+          && data.validatedBy.size() > 0);
+    }
+
+    function isAdminGuideCreate(guideId) {
+      let data = request.resource.data;
+      return isAdmin()
+        && guideId == data.uid
+        && isValidGuideCoreFields(data)
+        && isGuideActiveWithValidation(data)
+        && data.status in ['draft', 'pending_review'];
+    }
+
+    function isAdminGuideUpdate(guideId) {
+      let data = request.resource.data;
+      return isAdmin()
+        && guideId == data.uid
+        && resource.data.uid == guideId
+        && data.uid == resource.data.uid
+        && isValidGuideCoreFields(data)
+        && isGuideActiveWithValidation(data);
+    }
+
     function driverProfile() {
       return get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data;
     }
@@ -745,6 +851,16 @@ service cloud.firestore {
       allow update: if isAdminPartnerStatusUpdate()
         || isPartnerOwnerOnlineUpdate(partnerId)
         || isPartnerSelfProfileUpdate(partnerId);
+
+      allow delete: if false;
+    }
+
+    match /guides/{guideId} {
+      allow read: if isAdmin() || isGuideOwner(guideId);
+
+      allow create: if isAdminGuideCreate(guideId);
+
+      allow update: if isAdminGuideUpdate(guideId);
 
       allow delete: if false;
     }

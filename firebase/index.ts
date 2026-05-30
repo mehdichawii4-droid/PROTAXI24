@@ -5,6 +5,8 @@ export {
   db,
   getCollectionRef,
   getFirestoreDb,
+  getGuideDocRef,
+  getGuidesCollectionRef,
   getSubCollectionRef,
   getTourBookingDocRef,
   getTourBookingsCollectionRef,
@@ -21,7 +23,13 @@ export {
 } from './config';
 export type {
   AuthSessionUser,
+  Guide,
+  GuideExperienceId,
+  GuideSpecialty,
+  GuideStatus,
+  GuideYearsExperience,
   ProtaxiUserProfile,
+  TourBookingGuideFields,
   UserCollection,
   UserRole,
 } from './types';

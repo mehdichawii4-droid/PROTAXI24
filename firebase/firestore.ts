@@ -52,6 +52,18 @@ export function getSubCollectionRef(
   return collection(parentDocRef, subcollectionName);
 }
 
+export function getGuidesCollectionRef(): CollectionReference {
+  return getCollectionRef('guides');
+}
+
+export function getGuideDocRef(guideId: string): DocumentReference {
+  const normalizedGuideId = guideId.trim();
+  if (!normalizedGuideId) {
+    throw new Error('guideId is required to access a guides document.');
+  }
+  return doc(getFirestoreDb(), 'guides', normalizedGuideId);
+}
+
 export function getTourBookingsCollectionRef(): CollectionReference {
   return getCollectionRef('tourBookings');
 }
