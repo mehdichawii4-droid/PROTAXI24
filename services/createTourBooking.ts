@@ -1,4 +1,5 @@
 import { addDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { EXPERIENCE_OPTION_CATALOG } from '@/constants/experiencesPrivateCatalog';
 import {
   getFirestoreDb,
   getTourBookingDocRef,
@@ -8,6 +9,23 @@ import { matchOrCreateTourGroup } from '@/services/tourGroupMatching';
 import { generateTourTicketCode } from '@/services/tourGroupTicket';
 import { calculateGroupPaymentAmounts } from '@/services/tourGroupPayment';
 import { devError, devLog, devWarn } from '@/utils/devLog';
+
+const NO_EXTRA_OPTIONS_LABEL = 'Aucune option supplémentaire';
+
+/** Dérive guideRequested depuis le champ options (libellé catalogue « Guide local »). */
+export function deriveGuideRequestedFromOptions(options: string): boolean {
+  const guideLabel = EXPERIENCE_OPTION_CATALOG.guide.label;
+  const normalized = options.trim();
+
+  if (!normalized || normalized === NO_EXTRA_OPTIONS_LABEL) {
+    return false;
+  }
+
+  return normalized
+    .split(',')
+    .map((segment) => segment.trim())
+    .includes(guideLabel);
+}
 
 export type CreateTourBookingInput = {
   clientUid: string;
@@ -77,6 +95,7 @@ export async function createTourBooking(
   } = input;
 
   const isGroupMode = bookingMode === 'group';
+  const guideRequested = deriveGuideRequestedFromOptions(options);
 
   try {
     getFirestoreDb();
@@ -112,6 +131,7 @@ export async function createTourBooking(
       remainingAmount: groupPaymentAmounts?.remainingAmount ?? 0,
       paymentMethod: isGroupMode ? 'cash' : '',
       source,
+      guideRequested,
       ...partnerFields,
       createdAt: serverTimestamp(),
     });
