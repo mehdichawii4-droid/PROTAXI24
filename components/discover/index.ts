@@ -1,0 +1,11 @@
+export { default as DiscoverExperienceCard } from '@/components/discover/DiscoverExperienceCard';
+export { default as DiscoverFeaturedCarousel } from '@/components/discover/DiscoverFeaturedCarousel';
+export { default as DiscoverGuideTeaserCard } from '@/components/discover/DiscoverGuideTeaser';
+export { default as DiscoverHero } from '@/components/discover/DiscoverHero';
+export { default as DiscoverHotelTeasers } from '@/components/discover/DiscoverHotelTeasers';
+export { default as DiscoverPhotographerTeaserCard } from '@/components/discover/DiscoverPhotographerTeaser';
+export { default as DiscoverPopularRow } from '@/components/discover/DiscoverPopularRow';
+export { default as DiscoverRecommendationsList } from '@/components/discover/DiscoverRecommendationsList';
+export { default as DiscoverSectionHeader } from '@/components/discover/DiscoverSectionHeader';
+export { default as DiscoverTrendsHighlightCard } from '@/components/discover/DiscoverTrendsHighlight';
+export { default as DiscoverWhyProtaxi } from '@/components/discover/DiscoverWhyProtaxi';
