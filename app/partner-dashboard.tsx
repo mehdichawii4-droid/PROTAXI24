@@ -1,5 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -14,9 +14,14 @@ import {
   View,
 } from 'react-native';
 import { db } from '@/firebaseConfig';
+import { getPartnerDocRef } from '@/firebase/firestore';
 import type { PartnerStatus } from '@/firebase/types';
 import { useAuth } from '@/hooks/useAuth';
-import { fetchMyPartnerProfile, getPartnerSelfErrorMessage } from '@/services/partnerSelfService';
+import {
+  mapPartnerToSelfProfile,
+  normalizePartnerProfile,
+} from '@/services/partnerCoreService';
+import { getPartnerSelfErrorMessage } from '@/services/partnerSelfService';
 import type { PartnerSelfProfile } from '@/types/partner';
 import type { PartnerReservationItem } from '@/types/partner';
 import { devError, devLog } from '@/utils/devLog';
@@ -136,6 +141,15 @@ function mapRideToPartnerItem(
   };
 }
 
+function isFirestorePermissionDenied(error: unknown): boolean {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: string }).code === 'permission-denied'
+  );
+}
+
 function mapTourBookingToPartnerItem(
   id: string,
   data: Record<string, unknown>,
@@ -170,38 +184,69 @@ export default function PartnerDashboardScreen() {
   const partnerId = user?.uid ?? '';
   const canOperate = partner ? isPartnerOperational(partner.status) : false;
 
-  const loadProfile = useCallback(async () => {
-    const uid = user?.uid;
-    if (!uid) {
+  useEffect(() => {
+    if (!partnerId) {
       setPartner(null);
       setProfileError('Session partenaire introuvable. Reconnectez-vous.');
       setProfileLoading(false);
-      return;
+      return undefined;
     }
 
     setProfileLoading(true);
     setProfileError(null);
 
-    try {
-      const profile = await fetchMyPartnerProfile(uid);
-      if (!profile) {
-        setPartner(null);
-        setProfileError('Profil hôtel introuvable. Contactez le support PROTAXI.');
-        return;
-      }
-      setPartner(profile);
-    } catch (err) {
-      setPartner(null);
-      setProfileError(getPartnerSelfErrorMessage(err));
-    } finally {
-      setProfileLoading(false);
-    }
-  }, [user?.uid]);
+    const unsubscribeProfile = onSnapshot(
+      getPartnerDocRef(partnerId),
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setPartner(null);
+          setProfileError('Profil hôtel introuvable. Contactez le support PROTAXI.');
+          setProfileLoading(false);
+          return;
+        }
 
-  useFocusEffect(
-    useCallback(() => {
-      void loadProfile();
-    }, [loadProfile]),
+        const profile = normalizePartnerProfile(
+          partnerId,
+          snapshot.data() as Record<string, unknown>,
+        );
+        if (!profile) {
+          setPartner(null);
+          setProfileError('Profil hôtel introuvable. Contactez le support PROTAXI.');
+        } else {
+          setPartner(mapPartnerToSelfProfile(profile));
+          setProfileError(null);
+        }
+        setProfileLoading(false);
+      },
+      (error) => {
+        setPartner(null);
+        setProfileError(getPartnerSelfErrorMessage(error));
+        setProfileLoading(false);
+        devError('[PARTNER DASHBOARD] partner profile snapshot failed', error);
+      },
+    );
+
+    return unsubscribeProfile;
+  }, [partnerId]);
+
+  const handleReservationsSnapshotError = useCallback(
+    (collectionLabel: 'rides' | 'tourBookings', error: unknown) => {
+      if (isFirestorePermissionDenied(error)) {
+        devLog(
+          `[PARTNER DASHBOARD] ${collectionLabel} listener closed (access revoked or partner not active)`,
+        );
+      } else {
+        devError(`[PARTNER DASHBOARD] ${collectionLabel} snapshot denied`, error);
+      }
+
+      if (collectionLabel === 'rides') {
+        setRides([]);
+        setReservationsLoading(false);
+      } else {
+        setBookings([]);
+      }
+    },
+    [],
   );
 
   useEffect(() => {
@@ -236,11 +281,7 @@ export default function PartnerDashboardScreen() {
         );
         setReservationsLoading(false);
       },
-      (error) => {
-        devError('[PARTNER DASHBOARD] rides snapshot denied', error);
-        setRides([]);
-        setReservationsLoading(false);
-      },
+      (error) => handleReservationsSnapshotError('rides', error),
     );
 
     const unsubscribeBookings = onSnapshot(
@@ -252,17 +293,14 @@ export default function PartnerDashboardScreen() {
           ),
         );
       },
-      (error) => {
-        devError('[PARTNER DASHBOARD] tourBookings snapshot denied', error);
-        setBookings([]);
-      },
+      (error) => handleReservationsSnapshotError('tourBookings', error),
     );
 
     return () => {
       unsubscribeRides();
       unsubscribeBookings();
     };
-  }, [partnerId, canOperate]);
+  }, [partnerId, canOperate, handleReservationsSnapshotError]);
 
   const reservations = useMemo(
     () => [...rides, ...bookings].sort((a, b) => b.createdAtMs - a.createdAtMs),

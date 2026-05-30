@@ -1,26 +1,17 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentProps,
-} from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Platform,
-  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  type StyleProp,
-  type ViewStyle,
 } from 'react-native';
 import { useAuth } from '@/hooks/useAuth';
 import {
@@ -95,63 +86,6 @@ function getStatusPillStyle(status: AdminHotelDetail['status']) {
   }
 }
 
-type StatusActionVariant = 'primary' | 'outline' | 'danger';
-
-function StatusActionPressable({
-  label,
-  variant,
-  isDisabled,
-  onPress,
-  icon,
-}: {
-  label: string;
-  variant: StatusActionVariant;
-  isDisabled: boolean;
-  onPress: () => void;
-  icon?: ComponentProps<typeof Ionicons>['name'];
-}) {
-  const baseStyle: StyleProp<ViewStyle> =
-    variant === 'primary'
-      ? styles.primaryBtn
-      : variant === 'outline'
-        ? styles.outlineBtn
-        : styles.dangerBtn;
-
-  const textStyle =
-    variant === 'primary'
-      ? styles.primaryBtnText
-      : variant === 'outline'
-        ? styles.outlineBtnText
-        : styles.dangerBtnText;
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: isDisabled }}
-      style={({ pressed }) => [
-        baseStyle,
-        (isDisabled || pressed) && styles.btnDisabled,
-        Platform.OS === 'web' && {
-          cursor: isDisabled ? ('not-allowed' as const) : ('pointer' as const),
-        },
-      ]}
-      onPress={onPress}
-    >
-      {icon ? (
-        <Ionicons
-          name={icon}
-          size={18}
-          color={variant === 'primary' ? '#111' : '#FFF'}
-          pointerEvents="none"
-        />
-      ) : null}
-      <Text style={textStyle} pointerEvents="none">
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
 export default function AdminHotelDetailsScreen() {
   const params = useLocalSearchParams<{ id?: string | string[] }>();
   const hotelId = normalizeParam(params.id);
@@ -188,8 +122,11 @@ export default function AdminHotelDetailsScreen() {
   }, [loadHotel]);
 
   const confirmAction = useCallback((title: string, message: string, onConfirm: () => void) => {
+    console.log('[ADMIN HOTELS] confirmAction called', { title, platform: Platform.OS });
+
     if (Platform.OS === 'web') {
       const accepted = window.confirm(message.trim() ? `${title}\n\n${message}` : title);
+      console.log('[ADMIN HOTELS] confirmAction web result', { accepted });
       if (accepted) onConfirm();
       return;
     }
@@ -221,6 +158,34 @@ export default function AdminHotelDetailsScreen() {
   }, [detail]);
 
   const statusStyle = detail ? getStatusPillStyle(detail.status) : null;
+
+  const handleValidate = useCallback(() => {
+    if (!detail) return;
+    if (statusUpdating) return;
+    if (!adminUid) {
+      showAppAlert(
+        'Session',
+        'Identifiant administrateur indisponible. Reconnectez-vous.',
+      );
+      return;
+    }
+    confirmAction(
+      'Activer l\'hôtel',
+      `Activer ${detail.companyName} comme partenaire hôtel PROTAXI ?`,
+      () =>
+        void runStatusAction('Hôtel activé', () => validateHotel(detail.uid, adminUid)),
+    );
+  }, [adminUid, confirmAction, detail, runStatusAction, statusUpdating]);
+
+  const handleSuspend = useCallback(() => {
+    if (!detail) return;
+    if (statusUpdating) return;
+    confirmAction(
+      'Suspendre l\'hôtel',
+      `Suspendre ${detail.companyName} ? Les réservations et la connexion seront bloquées.`,
+      () => void runStatusAction('Hôtel suspendu', () => suspendHotel(detail.uid)),
+    );
+  }, [confirmAction, detail, runStatusAction, statusUpdating]);
 
   if (loading) {
     return (
@@ -255,7 +220,11 @@ export default function AdminHotelDetailsScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => router.replace(PROTAXI_ROUTES.adminHotels)}
@@ -330,70 +299,69 @@ export default function AdminHotelDetailsScreen() {
         {detail.status === 'pending_review' ? (
           <View style={styles.actionsCard}>
             <Text style={styles.actionsTitle}>Actions</Text>
-            <StatusActionPressable
-              label="Valider"
-              variant="primary"
-              isDisabled={statusUpdating || !adminUid}
-              icon="checkmark-circle-outline"
+            <TouchableOpacity
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              style={[
+                styles.primaryBtn,
+                statusUpdating && styles.btnDisabled,
+                Platform.OS === 'web' && styles.webActionBtn,
+              ]}
               onPress={() => {
-                if (statusUpdating || !adminUid) {
-                  if (!adminUid) {
-                    showAppAlert(
-                      'Session',
-                      'Identifiant administrateur indisponible. Reconnectez-vous.',
-                    );
-                  }
-                  return;
-                }
-                confirmAction(
-                  'Valider l\'hôtel',
-                  `Activer ${detail.companyName} comme partenaire hôtel PROTAXI ?`,
-                  () =>
-                    void runStatusAction('Hôtel validé', () =>
-                      validateHotel(detail.uid, adminUid),
-                    ),
-                );
+                console.log('ACTIVATE CLICK');
+                handleValidate();
               }}
-            />
+            >
+              <Ionicons name="checkmark-circle-outline" size={18} color="#111" pointerEvents="none" />
+              <Text style={styles.primaryBtnText} pointerEvents="none">
+                Activer
+              </Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
         {detail.status === 'active' ? (
           <View style={styles.actionsCard}>
             <Text style={styles.actionsTitle}>Actions</Text>
-            <StatusActionPressable
-              label="Suspendre"
-              variant="danger"
-              isDisabled={statusUpdating}
-              icon="pause-circle-outline"
+            <TouchableOpacity
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              style={[
+                styles.dangerBtn,
+                statusUpdating && styles.btnDisabled,
+                Platform.OS === 'web' && styles.webActionBtn,
+              ]}
               onPress={() => {
-                if (statusUpdating) return;
-                confirmAction(
-                  'Suspendre l\'hôtel',
-                  `Suspendre ${detail.companyName} ? Les réservations et la connexion seront bloquées.`,
-                  () => void runStatusAction('Hôtel suspendu', () => suspendHotel(detail.uid)),
-                );
+                console.log('SUSPEND CLICK');
+                handleSuspend();
               }}
-            />
+            >
+              <Ionicons name="pause-circle-outline" size={18} color={red} pointerEvents="none" />
+              <Text style={styles.dangerBtnText} pointerEvents="none">
+                Suspendre
+              </Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
         {detail.status === 'suspended' ? (
           <View style={styles.actionsCard}>
             <Text style={styles.actionsTitle}>Actions</Text>
-            <StatusActionPressable
-              label="Réactiver"
-              variant="primary"
-              isDisabled={statusUpdating || !adminUid}
-              icon="refresh-outline"
+            <TouchableOpacity
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              style={[
+                styles.primaryBtn,
+                statusUpdating && styles.btnDisabled,
+                Platform.OS === 'web' && styles.webActionBtn,
+              ]}
               onPress={() => {
-                if (statusUpdating || !adminUid) {
-                  if (!adminUid) {
-                    showAppAlert(
-                      'Session',
-                      'Identifiant administrateur indisponible. Reconnectez-vous.',
-                    );
-                  }
+                if (statusUpdating) return;
+                if (!adminUid) {
+                  showAppAlert(
+                    'Session',
+                    'Identifiant administrateur indisponible. Reconnectez-vous.',
+                  );
                   return;
                 }
                 confirmAction(
@@ -405,7 +373,12 @@ export default function AdminHotelDetailsScreen() {
                     ),
                 );
               }}
-            />
+            >
+              <Ionicons name="refresh-outline" size={18} color="#111" pointerEvents="none" />
+              <Text style={styles.primaryBtnText} pointerEvents="none">
+                Réactiver
+              </Text>
+            </TouchableOpacity>
           </View>
         ) : null}
       </ScrollView>
@@ -559,6 +532,11 @@ const styles = StyleSheet.create({
   },
   dangerBtnText: { color: red, fontSize: 15, fontWeight: '900' },
   btnDisabled: { opacity: 0.55 },
+  webActionBtn: {
+    cursor: 'pointer',
+    zIndex: 2,
+    minHeight: 48,
+  },
   secondaryBtn: {
     marginTop: 12,
     borderRadius: 12,

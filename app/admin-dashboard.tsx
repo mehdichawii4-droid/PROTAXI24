@@ -54,6 +54,7 @@ import {
   getTourBookingSourceLabel,
 } from '@/services/tourBookingHistory';
 import { devError } from '@/utils/devLog';
+import { PROTAXI_ROUTES } from '@/utils/navigation';
 import {
   assignRideToNearestEligibleDriver,
   DriverDispatchError,
@@ -1793,7 +1794,10 @@ useEffect(() => {
               subtitle="Validation & statuts hôtel"
               icon="domain"
               accent={gold}
-              onPress={() => router.push('/admin-hotels')}
+              onPress={() => {
+                console.log('[ADMIN DASHBOARD] hotels pressed');
+                router.push(PROTAXI_ROUTES.adminHotels);
+              }}
             />
             <AdminProQuickActionCard
               index={1}

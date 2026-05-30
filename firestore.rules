@@ -430,6 +430,41 @@ service cloud.firestore {
         || (isDriver() && (hasNoAssignedDriver(data) || isAssignedDriver(data)));
     }
 
+    // Requêtes list (onSnapshot / getDocs) — une règle par filtre de requête (pas de OR large).
+    function canPartnerListOwnRide() {
+      return isPartnerActive()
+        && resource.data.partnerId is string
+        && resource.data.partnerId.size() > 0
+        && resource.data.partnerId == request.auth.uid;
+    }
+
+    function canClientListOwnRide() {
+      return isRideOwner(resource.data);
+    }
+
+    function canDriverListRide() {
+      return isDriver() && (
+        (resource.data.driverId is string
+          && resource.data.driverId.size() > 0
+          && resource.data.driverId == request.auth.uid)
+        || hasNoAssignedDriver(resource.data)
+      );
+    }
+
+    function canPartnerListOwnTourBooking() {
+      return isPartnerActive()
+        && resource.data.partnerId is string
+        && resource.data.partnerId.size() > 0
+        && resource.data.partnerId == request.auth.uid;
+    }
+
+    function canReadTourBooking(data) {
+      return isAdmin()
+        || isOwner(data)
+        || isPartnerTourBookingOwner(data)
+        || isDriver();
+    }
+
     function isClientUser() {
       return isSignedIn() && !isAdmin() && !isDriver() && !isPartner();
     }
@@ -1047,7 +1082,11 @@ service cloud.firestore {
     }
 
     match /rides/{rideId} {
-      allow read: if isSignedIn() && canReadRide(resource.data);
+      allow get: if isSignedIn() && canReadRide(resource.data);
+      allow list: if isAdmin();
+      allow list: if canPartnerListOwnRide();
+      allow list: if canClientListOwnRide();
+      allow list: if canDriverListRide();
       allow create: if isClientRideCreate() || isPartnerRideCreate();
 
       allow update: if isSignedIn() && (
@@ -1081,12 +1120,11 @@ service cloud.firestore {
     // =========================================================================
 
     match /tourBookings/{bookingId} {
-      allow read: if isSignedIn() && (
-        isAdmin()
-        || isOwner(resource.data)
-        || isPartnerTourBookingOwner(resource.data)
-        || isDriver()
-      );
+      allow get: if isSignedIn() && canReadTourBooking(resource.data);
+      allow list: if isAdmin();
+      allow list: if canPartnerListOwnTourBooking();
+      allow list: if isOwner(resource.data);
+      allow list: if isDriver();
 
       allow create: if isSignedIn() && (
         (
