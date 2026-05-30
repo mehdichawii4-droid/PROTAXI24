@@ -223,6 +223,47 @@ service cloud.firestore {
         && isGuideActiveWithValidation(data);
     }
 
+    // Phase 2.0 — inscription guide autonome (owner, sans champs admin)
+    function hasNoGuideAdminOnlyFieldsOnCreate(data) {
+      return !('internalNotes' in data)
+        && !('validatedAt' in data)
+        && !('validatedBy' in data);
+    }
+
+    function isGuideSelfProtectedAdminFieldsUnchanged() {
+      let data = request.resource.data;
+      let existing = resource.data;
+      return (!('internalNotes' in existing)
+          || ('internalNotes' in data) && data.internalNotes == existing.internalNotes)
+        && (!('validatedAt' in existing)
+          || ('validatedAt' in data) && data.validatedAt == existing.validatedAt)
+        && (!('validatedBy' in existing)
+          || ('validatedBy' in data) && data.validatedBy == existing.validatedBy);
+    }
+
+    function isGuideSelfCreate(guideId) {
+      let data = request.resource.data;
+      return isGuideOwner(guideId)
+        && guideId == data.uid
+        && isValidGuideCoreFields(data)
+        && isGuideActiveWithValidation(data)
+        && data.status == 'pending_review'
+        && hasNoGuideAdminOnlyFieldsOnCreate(data);
+    }
+
+    function isGuideSelfUpdate(guideId) {
+      let data = request.resource.data;
+      return isGuideOwner(guideId)
+        && guideId == data.uid
+        && resource.data.uid == guideId
+        && data.uid == resource.data.uid
+        && resource.data.status in ['draft', 'pending_review']
+        && data.status in ['draft', 'pending_review']
+        && isValidGuideCoreFields(data)
+        && isGuideActiveWithValidation(data)
+        && isGuideSelfProtectedAdminFieldsUnchanged();
+    }
+
     function driverProfile() {
       return get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data;
     }
@@ -858,9 +899,9 @@ service cloud.firestore {
     match /guides/{guideId} {
       allow read: if isAdmin() || isGuideOwner(guideId);
 
-      allow create: if isAdminGuideCreate(guideId);
+      allow create: if isAdminGuideCreate(guideId) || isGuideSelfCreate(guideId);
 
-      allow update: if isAdminGuideUpdate(guideId);
+      allow update: if isAdminGuideUpdate(guideId) || isGuideSelfUpdate(guideId);
 
       allow delete: if false;
     }
