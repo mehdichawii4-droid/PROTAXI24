@@ -106,6 +106,22 @@ export type AssignGuideResult = {
   assignedGuideName: string;
 };
 
+/** Mission assignée — lecture seule côté guide (Guide Missions V1). */
+export type GuideMissionItem = {
+  id: string;
+  experience: string;
+  date: string;
+  meetingPoint: string;
+  clientName: string;
+  travelers: string;
+  status: string;
+  statusLabel: string;
+  statusColor: string;
+  statusBg: string;
+  statusBorder: string;
+  createdAtMs: number;
+};
+
 export class GuideServiceError extends Error {
   code: GuideErrorCode;
   fieldErrors?: GuideFieldError[];
