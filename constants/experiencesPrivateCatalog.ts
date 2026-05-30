@@ -73,7 +73,7 @@ export const FORMULA_GROUP_PERKS = [
   'Places limitées',
 ] as const;
 
-const CARD_INCLUS_VISIBLE_MAX = 4;
+const CARD_INCLUS_VISIBLE_MAX = 3;
 
 /** Catalogue officiel lancement Guelma — expériences privées uniquement. */
 export const EXPERIENCES_V1: ExperienceV1[] = [
@@ -158,21 +158,27 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     circuitName: 'Mémoire de Guelma',
     duration: 'Demi-journée',
     identityBadge: '🇩🇿 Mémoire nationale',
-    hook: 'Revivez les moments qui ont marqué l’histoire contemporaine de la région.',
+    hook:
+      'Du départ de la marche du 8 mai aux lieux de mémoire : un parcours émotionnel au cœur de Guelma.',
     cardInclus: [
+      'Départ de la marche du 8 mai 1945',
+      'Fresque des martyrs',
+      'Four à chaux',
+      'Monument commémoratif des martyrs',
       'Musée El Moudjahid',
-      'Monument des Martyrs',
       'Maison Houari Boumediene',
-      'Lieux du 8 mai 1945',
     ],
-    guideAvailability: 'Guide historique disponible',
+    guideAvailability: 'Guide historique & mémoire disponible',
     highlights: [
+      'Départ de la marche du 8 mai 1945',
+      'Fresque des martyrs & ancienne caserne',
+      'Gare ferroviaire historique & Kef El-Bomba',
+      'Four à chaux',
+      'Monument commémoratif des martyrs',
       'Musée El Moudjahid',
-      'Monument des Martyrs',
       'Maison Houari Boumediene',
-      'Lieux liés au 8 mai 1945',
     ],
-    recommendedGuide: 'Guide historique recommandé',
+    recommendedGuide: 'Guide historique & mémoire recommandé',
     availableOptions: ['guide', 'photographer', 'premium_vehicle', 'traditional_lunch'],
     bookingMode: 'private',
   },
@@ -182,16 +188,26 @@ export const EXPERIENCES_V1: ExperienceV1[] = [
     circuitName: 'Sur les Traces des Civilisations',
     duration: 'Journée',
     identityBadge: '🏺 Archéologie & civilisations',
-    hook: 'Des premiers peuples aux civilisations antiques, découvrez plusieurs millénaires d’histoire.',
+    hook:
+      'De Thibilis aux tombes mégalithiques : une journée sur les traces des premières civilisations de Guelma.',
     cardInclus: [
-      'Thibilis',
+      'Thibilis — cité antique',
+      'Grotte Ghar Djemaa',
       'Khanguet Lahdjar',
-      'Tombes mégalithiques',
-      'Sites archéologiques',
+      'Nécropole de Roknia',
+      'Tombes mégalithiques & dolmens',
     ],
-    guideAvailability: 'Guide archéologie disponible',
-    highlights: ['Thibilis', 'Khanguet Lahdjar', 'Tombes mégalithiques'],
-    recommendedGuide: 'Guide archéologique recommandé',
+    guideAvailability: 'Guide archéologie & préhistoire disponible',
+    highlights: [
+      'Thibilis — cité antique & vestiges romains',
+      'Aquæ Thibilitanæ — vestiges antiques de Thibilis',
+      'Grotte Ghar Djemaa',
+      'Khanguet Lahdjar',
+      'Nécropole de Roknia',
+      'Tombes mégalithiques et dolmens',
+      'Parcours préhistorique — route de la préhistoire',
+    ],
+    recommendedGuide: 'Guide archéologie & préhistoire recommandé',
     availableOptions: ['guide', 'photographer', 'premium_vehicle', 'traditional_lunch'],
     bookingMode: 'private',
   },
@@ -238,21 +254,19 @@ export function getExperienceSiteCount(experience: ExperienceV1) {
 export function getExperienceSiteBadgeLabel(experience: ExperienceV1) {
   const count = getExperienceSiteCount(experience);
   const plural = count > 1 ? 's' : '';
-  return `📍 ${count} site${plural} à découvrir`;
+  return `📍 ${count} site${plural} inclus`;
 }
 
-/** Puces carte étape 2 — max 4 visibles + overflow. */
-export function formatExperienceCardInclusLine(
+/** Lieux affichés sur la carte étape 2 — max 3, liste verticale. */
+export function getExperienceCardInclusPreview(
   experience: ExperienceV1,
   maxVisible = CARD_INCLUS_VISIBLE_MAX,
 ) {
-  const items = experience.cardInclus;
-  const visible = items.slice(0, maxVisible);
-  const overflow = items.length - visible.length;
-  const line = visible.map((label) => `• ${label}`).join('  ');
-  if (overflow <= 0) return line;
-  const otherWord = overflow > 1 ? 'autres étapes' : 'autre étape';
-  return `${line}  + ${overflow} ${otherWord}`;
+  return experience.cardInclus.slice(0, maxVisible);
+}
+
+export function hasMoreExperiencePlaces(experience: ExperienceV1) {
+  return experience.cardInclus.length > CARD_INCLUS_VISIBLE_MAX;
 }
 
 export function getExperienceV1(experienceId: string) {
