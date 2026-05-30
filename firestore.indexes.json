@@ -41,6 +41,14 @@
       ]
     },
     {
+      "collectionGroup": "tourBookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "assignedGuideId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "driversLive",
       "queryScope": "COLLECTION",
       "fields": [
