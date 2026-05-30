@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { collection, collectionGroup, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { getDistance } from 'geolib';
-import { useEffect, useMemo, useRef, useState, type ComponentProps, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type RefObject } from 'react';
 import {
   Alert,
 
@@ -32,7 +32,15 @@ import {
 import { LineChart } from 'react-native-chart-kit';
 import AdminLiveMap from '@/components/AdminLiveMap';
 import WebMapPlaceholder from '@/components/WebMapPlaceholder';
+import { useAuth } from '@/hooks/useAuth';
 import { useAuthLogout } from '@/hooks/useAuthLogout';
+import {
+  assignGuideToTourBooking,
+  clearGuideAssignment,
+  getGuideAssignErrorMessage,
+  listAssignableGuidesForBooking,
+} from '@/services/adminGuideService';
+import type { AssignableGuideOption } from '@/types/guide';
 import {
   configureNotificationHandler,
   mapRideNotificationContext,
@@ -171,6 +179,11 @@ type TourBooking = {
   status?: TourBookingStatus | string;
   source?: string;
   createdAt?: { toDate?: () => Date } | Date | string;
+  guideRequested?: boolean;
+  assignedGuideId?: string | null;
+  assignedGuideName?: string | null;
+  guideAssignedAt?: { toDate?: () => Date } | Date | string | null;
+  guideAssignedBy?: string | null;
 };
 
 type TourGroupStatus = 'open' | 'full';
@@ -565,6 +578,8 @@ const formatDriverGpsUpdate = (driver: any) => {
 };
 
 export default function AdminDashboardScreen() {
+  const { user, profile } = useAuth();
+  const adminUid = user?.uid ?? profile?.uid ?? null;
   const { confirmLogout } = useAuthLogout();
   const [filter, setFilter] = useState('Toutes');
   const [adminRequests, setAdminRequests] = useState<any[]>([]);
@@ -2447,6 +2462,7 @@ useEffect(() => {
               <TourBookingCard
                 key={booking.id}
                 booking={booking}
+                adminUid={adminUid}
                 isProcessing={processingTourBookingId === booking.id}
                 onConfirm={() => updateTourBookingStatus(booking.id, 'confirmed')}
                 onCancel={() => updateTourBookingStatus(booking.id, 'cancelled')}
@@ -3862,13 +3878,324 @@ function TourGroupInfoRow({
   );
 }
 
+function isTourBookingGuideAssignEligible(booking: TourBooking): boolean {
+  const status = booking.status || 'pending';
+  return (
+    booking.source === 'experiences-private' &&
+    booking.guideRequested === true &&
+    (status === 'pending' || status === 'confirmed')
+  );
+}
+
+function showTourGuideAlert(title: string, message?: string) {
+  if (Platform.OS === 'web') {
+    window.alert(message ? `${title}\n\n${message}` : title);
+    return;
+  }
+  Alert.alert(title, message ?? '');
+}
+
+function confirmTourGuideAction(title: string, message: string, onConfirm: () => void) {
+  if (Platform.OS === 'web') {
+    const accepted = window.confirm(message.trim() ? `${title}\n\n${message}` : title);
+    if (accepted) onConfirm();
+    return;
+  }
+
+  Alert.alert(title, message, [
+    { text: 'Annuler', style: 'cancel' },
+    { text: 'Confirmer', onPress: onConfirm },
+  ]);
+}
+
+function formatGuideAssignedAt(value: TourBooking['guideAssignedAt']): string {
+  if (!value) return '—';
+  let date: Date | null = null;
+  if (value instanceof Date) date = value;
+  else if (typeof value === 'string') date = new Date(value);
+  else if (typeof value === 'object' && value !== null && 'toDate' in value) {
+    date = (value as { toDate?: () => Date }).toDate?.() ?? null;
+  }
+  if (!date || Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function TourBookingGuideAssignBlock({
+  booking,
+  adminUid,
+}: {
+  booking: TourBooking;
+  adminUid: string | null;
+}) {
+  const [guides, setGuides] = useState<AssignableGuideOption[]>([]);
+  const [loadingGuides, setLoadingGuides] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedGuideUid, setSelectedGuideUid] = useState<string | null>(null);
+  const [processingGuide, setProcessingGuide] = useState(false);
+
+  const isEligible = isTourBookingGuideAssignEligible(booking);
+  const hasAssigned = Boolean(booking.assignedGuideId);
+  const assignedGuideOption = useMemo(
+    () => guides.find((guide) => guide.uid === booking.assignedGuideId) ?? null,
+    [guides, booking.assignedGuideId],
+  );
+  const selectedGuide = useMemo(
+    () => guides.find((guide) => guide.uid === selectedGuideUid) ?? null,
+    [guides, selectedGuideUid],
+  );
+  const canAssign =
+    Boolean(selectedGuideUid) &&
+    guides.length > 0 &&
+    !processingGuide &&
+    Boolean(adminUid);
+  const canReassign =
+    hasAssigned &&
+    Boolean(selectedGuideUid) &&
+    selectedGuideUid !== booking.assignedGuideId &&
+    guides.length > 0 &&
+    !processingGuide &&
+    Boolean(adminUid);
+
+  const loadGuides = useCallback(async () => {
+    setLoadingGuides(true);
+    setLoadError(null);
+    try {
+      const list = await listAssignableGuidesForBooking(booking.id);
+      setGuides(list);
+    } catch (error) {
+      setGuides([]);
+      setLoadError(getGuideAssignErrorMessage(error));
+    } finally {
+      setLoadingGuides(false);
+    }
+  }, [booking.id]);
+
+  useEffect(() => {
+    if (!isEligible) return;
+    void loadGuides();
+  }, [isEligible, loadGuides]);
+
+  useEffect(() => {
+    if (booking.assignedGuideId) {
+      setSelectedGuideUid(booking.assignedGuideId);
+      return;
+    }
+    setSelectedGuideUid((current) => current ?? guides[0]?.uid ?? null);
+  }, [booking.assignedGuideId, guides]);
+
+  const runAssign = (isReassign: boolean) => {
+    if (!adminUid) {
+      showTourGuideAlert('Session', 'Connectez-vous en tant qu\'administrateur.');
+      return;
+    }
+    if (!selectedGuideUid || !selectedGuide) return;
+
+    const title = isReassign ? 'Réassigner le guide' : 'Assigner le guide';
+    const message = isReassign
+      ? `Remplacer le guide actuel par ${selectedGuide.displayName} ?`
+      : `Assigner ${selectedGuide.displayName} à cette réservation ?`;
+
+    confirmTourGuideAction(title, message, () => {
+      void (async () => {
+        setProcessingGuide(true);
+        try {
+          await assignGuideToTourBooking(booking.id, selectedGuideUid, adminUid);
+          showTourGuideAlert('Guide assigné', `${selectedGuide.displayName} est assigné à la réservation.`);
+        } catch (error) {
+          showTourGuideAlert('Assignation impossible', getGuideAssignErrorMessage(error));
+        } finally {
+          setProcessingGuide(false);
+        }
+      })();
+    });
+  };
+
+  const runClear = () => {
+    confirmTourGuideAction(
+      'Retirer le guide',
+      'Retirer le guide assigné de cette réservation ?',
+      () => {
+        void (async () => {
+          setProcessingGuide(true);
+          try {
+            await clearGuideAssignment(booking.id);
+            setSelectedGuideUid(guides[0]?.uid ?? null);
+            showTourGuideAlert('Guide retiré', 'L\'assignation a été supprimée.');
+          } catch (error) {
+            showTourGuideAlert('Retrait impossible', getGuideAssignErrorMessage(error));
+          } finally {
+            setProcessingGuide(false);
+          }
+        })();
+      },
+    );
+  };
+
+  if (!isEligible) return null;
+
+  const assignedName = booking.assignedGuideName || assignedGuideOption?.displayName || '—';
+  const assignedPhone = assignedGuideOption?.phone || '—';
+  const assignedSpecialties =
+    assignedGuideOption?.specialtiesSummary || '—';
+
+  return (
+    <View style={styles.tourismGuideBlock}>
+      <View style={styles.tourismGuideBlockHeader}>
+        <View style={styles.tourismGuideBlockTitleRow}>
+          <MaterialCommunityIcons name="account-tie-outline" size={18} color={tourismGreen} />
+          <Text style={styles.tourismGuideBlockTitle}>Guide PROTAXI (expérience privée)</Text>
+        </View>
+        <View style={styles.tourismGuideRequestedBadge}>
+          <Text style={styles.tourismGuideRequestedBadgeText}>Guide demandé</Text>
+        </View>
+      </View>
+
+      {hasAssigned ? (
+        <View style={styles.tourismGuideAssignedCard}>
+          <Text style={styles.tourismGuideAssignedLabel}>Guide assigné</Text>
+          <Text style={styles.tourismGuideAssignedName}>{assignedName}</Text>
+          <View style={styles.tourismGuideAssignedMetaRow}>
+            <Ionicons name="call-outline" size={14} color={tourismGreen} />
+            <Text style={styles.tourismGuideAssignedMeta}>{assignedPhone}</Text>
+          </View>
+          <View style={styles.tourismGuideAssignedMetaRow}>
+            <Ionicons name="ribbon-outline" size={14} color={tourismGreen} />
+            <Text style={styles.tourismGuideAssignedMeta}>{assignedSpecialties}</Text>
+          </View>
+          <Text style={styles.tourismGuideAssignedAt}>
+            Assigné le {formatGuideAssignedAt(booking.guideAssignedAt)}
+          </Text>
+        </View>
+      ) : (
+        <Text style={styles.tourismGuideEmptyState}>Aucun guide assigné</Text>
+      )}
+
+      <Text style={styles.tourismGuidePickerLabel}>
+        {hasAssigned ? 'Changer de guide' : 'Choisir un guide'}
+      </Text>
+
+      {loadingGuides ? (
+        <View style={styles.tourismGuideLoadingRow}>
+          <ActivityIndicator size="small" color={tourismGreen} />
+          <Text style={styles.tourismGuideLoadingText}>Chargement des guides compatibles…</Text>
+        </View>
+      ) : null}
+
+      {!loadingGuides && loadError ? (
+        <Text style={styles.tourismGuideErrorText}>{loadError}</Text>
+      ) : null}
+
+      {!loadingGuides && !loadError && guides.length === 0 ? (
+        <Text style={styles.tourismGuideErrorText}>
+          Aucun guide actif compatible pour cette expérience.
+        </Text>
+      ) : null}
+
+      {!loadingGuides && !loadError
+        ? guides.map((guide) => {
+            const isSelected = selectedGuideUid === guide.uid;
+            return (
+              <Pressable
+                key={guide.uid}
+                style={[
+                  styles.tourismGuidePickerRow,
+                  isSelected && styles.tourismGuidePickerRowSelected,
+                ]}
+                onPress={() => setSelectedGuideUid(guide.uid)}
+              >
+                <View
+                  style={[
+                    styles.tourismGuidePickerRadio,
+                    isSelected && styles.tourismGuidePickerRadioSelected,
+                  ]}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.tourismGuidePickerName}>{guide.displayName}</Text>
+                  <Text style={styles.tourismGuidePickerMeta}>
+                    {guide.specialtiesSummary} · {guide.phone}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })
+        : null}
+
+      <View style={styles.tourismGuideActionsRow}>
+        {!hasAssigned ? (
+          <TouchableOpacity
+            style={[
+              styles.tourismGuideAssignBtn,
+              (!canAssign || loadingGuides) && styles.tourismActionDisabled,
+            ]}
+            activeOpacity={0.85}
+            disabled={!canAssign || loadingGuides}
+            onPress={() => runAssign(false)}
+          >
+            {processingGuide ? (
+              <ActivityIndicator size="small" color="#111" />
+            ) : (
+              <Ionicons name="person-add-outline" size={16} color="#111" />
+            )}
+            <Text style={styles.tourismGuideAssignBtnText}>Assigner le guide</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[
+                styles.tourismGuideAssignBtn,
+                (!canReassign || loadingGuides) && styles.tourismActionDisabled,
+              ]}
+              activeOpacity={0.85}
+              disabled={!canReassign || loadingGuides}
+              onPress={() => runAssign(true)}
+            >
+              {processingGuide ? (
+                <ActivityIndicator size="small" color="#111" />
+              ) : (
+                <Ionicons name="swap-horizontal-outline" size={16} color="#111" />
+              )}
+              <Text style={styles.tourismGuideAssignBtnText}>Réassigner</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.tourismGuideRemoveBtn,
+                processingGuide && styles.tourismActionDisabled,
+              ]}
+              activeOpacity={0.85}
+              disabled={processingGuide}
+              onPress={runClear}
+            >
+              <Ionicons name="person-remove-outline" size={16} color="#FFF" />
+              <Text style={styles.tourismGuideRemoveBtnText}>Retirer le guide</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+
+      {!adminUid ? (
+        <Text style={styles.tourismGuideSessionHint}>
+          Session admin requise pour assigner un guide.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function TourBookingCard({
   booking,
+  adminUid,
   isProcessing,
   onConfirm,
   onCancel,
 }: {
   booking: TourBooking;
+  adminUid: string | null;
   isProcessing: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -3946,6 +4273,8 @@ function TourBookingCard({
         label="Créée le"
         value={formatTourBookingCreatedAt(booking)}
       />
+
+      <TourBookingGuideAssignBlock booking={booking} adminUid={adminUid} />
 
       {isPending ? (
         <View style={styles.tourismActionsRow}>
@@ -6074,6 +6403,225 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     flex: 1,
     textAlign: 'right',
+  },
+
+  tourismGuideBlock: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#1A1A1A',
+  },
+
+  tourismGuideBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 12,
+  },
+
+  tourismGuideBlockTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+
+  tourismGuideBlockTitle: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+
+  tourismGuideRequestedBadge: {
+    backgroundColor: 'rgba(212,160,23,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.45)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+
+  tourismGuideRequestedBadgeText: {
+    color: gold,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+
+  tourismGuideAssignedCard: {
+    backgroundColor: 'rgba(139,197,63,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.22)',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+    gap: 6,
+  },
+
+  tourismGuideAssignedLabel: {
+    color: '#8A8A8A',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  tourismGuideAssignedName: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  tourismGuideAssignedMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  tourismGuideAssignedMeta: {
+    color: '#D4D4D4',
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1,
+  },
+
+  tourismGuideAssignedAt: {
+    color: '#8A8A8A',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+
+  tourismGuideEmptyState: {
+    color: '#8A8A8A',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+
+  tourismGuidePickerLabel: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+
+  tourismGuideLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  tourismGuideLoadingText: {
+    color: '#8A8A8A',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  tourismGuideErrorText: {
+    color: '#FF9A9A',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+
+  tourismGuidePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+    borderColor: '#262626',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+  },
+
+  tourismGuidePickerRowSelected: {
+    borderColor: 'rgba(139,197,63,0.55)',
+    backgroundColor: 'rgba(139,197,63,0.1)',
+  },
+
+  tourismGuidePickerRadio: {
+    width: 16,
+    height: 16,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: '#555',
+    marginTop: 2,
+  },
+
+  tourismGuidePickerRadioSelected: {
+    borderColor: tourismGreen,
+    backgroundColor: tourismGreen,
+  },
+
+  tourismGuidePickerName: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+
+  tourismGuidePickerMeta: {
+    color: '#8A8A8A',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+
+  tourismGuideActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+
+  tourismGuideAssignBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: tourismGreen,
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+  },
+
+  tourismGuideAssignBtnText: {
+    color: '#111',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
+  tourismGuideRemoveBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#3A1515',
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.35)',
+    borderRadius: 14,
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+  },
+
+  tourismGuideRemoveBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+
+  tourismGuideSessionHint: {
+    color: '#8A8A8A',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 8,
   },
 
   tourismParticipantsSection: {
