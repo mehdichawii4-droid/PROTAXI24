@@ -7,10 +7,12 @@ import type {
 
 export type GuideErrorCode =
   | 'GUIDE_ID_REQUIRED'
+  | 'GUIDE_UID_MISMATCH'
   | 'GUIDE_NOT_FOUND'
   | 'GUIDE_ALREADY_EXISTS'
   | 'GUIDE_VALIDATION_FAILED'
   | 'GUIDE_STATUS_TRANSITION_INVALID'
+  | 'GUIDE_PROFILE_NOT_EDITABLE'
   | 'GUIDE_NOT_ASSIGNABLE'
   | 'EXPERIENCE_NOT_RESOLVED'
   | 'BOOKING_NOT_FOUND'
@@ -68,6 +70,27 @@ export type AdminGuideDetail = AdminGuideListItem & {
   photoUrl?: string;
   internalNotes?: string;
   validatedBy?: string;
+};
+
+/** Profil guide exposé à l'espace guide (Phase 2 — sans notes admin). */
+export type GuideSelfProfile = {
+  uid: string;
+  displayName: string;
+  phone: string;
+  email: string;
+  status: GuideStatus;
+  statusLabel: string;
+  specialtiesSummary: string;
+  allowedExperienceCount: number;
+  yearsExperience: GuideYearsExperience;
+  bio: string;
+  languages: string[];
+  specialties: GuideSpecialty[];
+  allowedExperienceIds: GuideExperienceId[];
+  photoUrl?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  validatedAt?: unknown;
 };
 
 export type AssignableGuideOption = {
