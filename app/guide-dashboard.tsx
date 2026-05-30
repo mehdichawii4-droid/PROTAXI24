@@ -1,7 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -14,15 +14,17 @@ import {
 } from 'react-native';
 
 import { useAuth } from '@/hooks/useAuth';
+import { subscribeGuideMissions } from '@/services/guideMissionService';
 import { fetchMyGuideProfile } from '@/services/guideSelfService';
 import { getGuideSelfErrorMessage } from '@/services/guideSelfService';
-import type { GuideSelfProfile } from '@/types/guide';
+import type { GuideMissionItem, GuideSelfProfile } from '@/types/guide';
 import type { GuideStatus } from '@/firebase/types';
 import {
   formatGuideExperienceLabels,
   formatGuideTimestamp,
 } from '@/utils/guideSelfProfileDisplay';
 import { PROTAXI_ROUTES } from '@/utils/navigation';
+import { devError } from '@/utils/devLog';
 
 const bg = '#050505';
 const card = '#0E0E0E';
@@ -73,6 +75,48 @@ function DashboardInfoRow({
   );
 }
 
+function GuideMissionCard({ mission }: { mission: GuideMissionItem }) {
+  return (
+    <View style={styles.missionCard}>
+      <View style={styles.missionHeader}>
+        <Text style={styles.missionTitle} numberOfLines={2}>
+          {mission.experience}
+        </Text>
+        <View
+          style={[
+            styles.missionStatusBadge,
+            { backgroundColor: mission.statusBg, borderColor: mission.statusBorder },
+          ]}
+        >
+          <Text style={[styles.missionStatusText, { color: mission.statusColor }]}>
+            {mission.statusLabel}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.missionMetaRow}>
+        <Ionicons name="calendar-outline" size={14} color={green} />
+        <Text style={styles.missionMetaText}>{mission.date}</Text>
+      </View>
+
+      <View style={styles.missionMetaRow}>
+        <Ionicons name="location-outline" size={14} color={green} />
+        <Text style={styles.missionMetaText} numberOfLines={2}>
+          {mission.meetingPoint}
+        </Text>
+      </View>
+
+      <View style={styles.missionMetaRow}>
+        <Ionicons name="person-outline" size={14} color={green} />
+        <Text style={styles.missionMetaText}>
+          {mission.clientName} · {mission.travelers} voyageur
+          {mission.travelers === '1' ? '' : 's'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export default function GuideDashboardScreen() {
   const { user, logout } = useAuth();
   const { registered } = useLocalSearchParams<{ registered?: string | string[] }>();
@@ -81,6 +125,12 @@ export default function GuideDashboardScreen() {
   const [guide, setGuide] = useState<GuideSelfProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [missions, setMissions] = useState<GuideMissionItem[]>([]);
+  const [missionsLoading, setMissionsLoading] = useState(false);
+  const [missionsError, setMissionsError] = useState<string | null>(null);
+
+  const guideUid = user?.uid ?? '';
+  const canLoadMissions = guide?.status === 'active' && Boolean(guideUid);
 
   const loadProfile = useCallback(async () => {
     const uid = user?.uid;
@@ -115,6 +165,35 @@ export default function GuideDashboardScreen() {
       void loadProfile();
     }, [loadProfile]),
   );
+
+  useEffect(() => {
+    if (!canLoadMissions) {
+      setMissions([]);
+      setMissionsLoading(false);
+      setMissionsError(null);
+      return undefined;
+    }
+
+    setMissionsLoading(true);
+    setMissionsError(null);
+
+    const unsubscribe = subscribeGuideMissions(
+      guideUid,
+      (nextMissions) => {
+        setMissions(nextMissions);
+        setMissionsLoading(false);
+        setMissionsError(null);
+      },
+      (snapshotError) => {
+        devError('[GUIDE DASHBOARD] missions snapshot failed', snapshotError);
+        setMissions([]);
+        setMissionsLoading(false);
+        setMissionsError('Impossible de charger vos missions pour le moment.');
+      },
+    );
+
+    return unsubscribe;
+  }, [canLoadMissions, guideUid]);
 
   const statusStyle = guide ? getStatusStyle(guide.status) : null;
   const experienceLabels = guide
@@ -184,8 +263,8 @@ export default function GuideDashboardScreen() {
               ) : null}
               {guide.status === 'active' ? (
                 <Text style={styles.heroHint}>
-                  Vous êtes guide certifié PROTAXI. Les missions vous seront assignées par
-                  l&apos;équipe.
+                  Vous êtes guide certifié PROTAXI. Retrouvez ci-dessous les missions qui vous
+                  sont assignées.
                 </Text>
               ) : null}
               {guide.status === 'suspended' ? (
@@ -220,6 +299,51 @@ export default function GuideDashboardScreen() {
                 value={formatGuideTimestamp(guide.updatedAt)}
               />
             </View>
+
+            {guide.status === 'active' ? (
+              <View style={styles.sectionCard}>
+                <View style={styles.missionsHeaderRow}>
+                  <Text style={styles.sectionTitle}>Mes missions</Text>
+                  <View style={styles.missionsCountPill}>
+                    <Text style={styles.missionsCountText}>{missions.length}</Text>
+                  </View>
+                </View>
+
+                {missionsLoading ? (
+                  <View style={styles.missionsLoadingWrap}>
+                    <ActivityIndicator size="small" color={green} />
+                    <Text style={styles.missionsLoadingText}>Chargement des missions…</Text>
+                  </View>
+                ) : null}
+
+                {!missionsLoading && missionsError ? (
+                  <View style={styles.missionsEmptyCard}>
+                    <Ionicons name="alert-circle-outline" size={22} color={gold} />
+                    <Text style={styles.missionsEmptyText}>{missionsError}</Text>
+                  </View>
+                ) : null}
+
+                {!missionsLoading && !missionsError && missions.length === 0 ? (
+                  <View style={styles.missionsEmptyCard}>
+                    <MaterialCommunityIcons
+                      name="calendar-blank-outline"
+                      size={34}
+                      color={muted}
+                    />
+                    <Text style={styles.missionsEmptyTitle}>Aucune mission pour le moment</Text>
+                    <Text style={styles.missionsEmptyText}>
+                      PROTAXI affichera ici les expériences privées qui vous seront assignées.
+                    </Text>
+                  </View>
+                ) : null}
+
+                {!missionsLoading && !missionsError
+                  ? missions.map((mission) => (
+                      <GuideMissionCard key={mission.id} mission={mission} />
+                    ))
+                  : null}
+              </View>
+            ) : null}
 
             <TouchableOpacity
               style={styles.primaryBtn}
@@ -378,4 +502,73 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   secondaryBtnText: { color: '#FFF', fontWeight: '700' },
+  missionsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  missionsCountPill: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(139,197,63,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  missionsCountText: { color: green, fontSize: 13, fontWeight: '900' },
+  missionsLoadingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 16,
+  },
+  missionsLoadingText: { color: muted, fontSize: 13, fontWeight: '600' },
+  missionsEmptyCard: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 20,
+    paddingHorizontal: 12,
+  },
+  missionsEmptyTitle: { color: '#FFF', fontSize: 15, fontWeight: '900', textAlign: 'center' },
+  missionsEmptyText: {
+    color: muted,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  missionCard: {
+    backgroundColor: '#0A0A0A',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: border,
+    padding: 14,
+    gap: 10,
+    marginBottom: 10,
+  },
+  missionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  missionTitle: {
+    flex: 1,
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  missionStatusBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  missionStatusText: { fontSize: 11, fontWeight: '800' },
+  missionMetaRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  missionMetaText: { flex: 1, color: '#DADADA', fontSize: 13, lineHeight: 18 },
 });
