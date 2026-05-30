@@ -114,7 +114,7 @@ const SERVICE_GRID: ServiceGridItem[] = [
   { id: 'airport', label: 'Aéroport', icon: 'airplane-outline', route: PROTAXI_ROUTES.airport },
   {
     id: 'circuits',
-    label: 'Circuits touristiques',
+    label: 'Explorer',
     icon: 'compass-outline',
     route: PROTAXI_ROUTES.discoverGuelma,
     badge: 'NOUVEAU',
@@ -504,7 +504,7 @@ function GuideSection({ onPress }: { onPress: () => void }) {
         <Text style={styles.guideEyebrow}>EXPÉRIENCE LOCAL</Text>
         <Text style={styles.guideTitle}>Besoin d&apos;un guide ?</Text>
         <Text style={styles.guideDesc}>
-          Découvrez Guelma avec un accompagnateur professionnel et un chauffeur PROTAXI.
+          Explorez Guelma avec un accompagnateur professionnel et un chauffeur PROTAXI.
         </Text>
 
         <TouchableOpacity style={styles.guideCta} activeOpacity={0.9} onPress={onPress}>

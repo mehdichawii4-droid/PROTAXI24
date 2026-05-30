@@ -531,7 +531,7 @@ const EXPERIENCE_REVIEWS: Record<string, string[]> = {
   ],
   gastro: [
     'Les saveurs locales étaient exceptionnelles.',
-    'Parfait pour découvrir Guelma autrement.',
+    'Parfait pour explorer Guelma avec PROTAXI.',
     'Service PROTAXI très professionnel.',
   ],
   sunset: [

@@ -142,7 +142,7 @@ export default function DiscoverGuelmaScreen() {
 
             <View style={styles.topBarCenter}>
               <MaterialCommunityIcons name="compass-outline" size={16} color={DISCOVER_GREEN} />
-              <Text style={styles.topBarTitle}>TOURISME GUELMA</Text>
+              <Text style={styles.topBarTitle}>EXPLORER · GUELMA</Text>
             </View>
 
             <View style={styles.iconBtnPlaceholder} />

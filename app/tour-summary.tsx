@@ -2054,7 +2054,7 @@ export default function TourSummaryScreen() {
             {fromDiscover ? (
               <View style={styles.discoverBadge}>
                 <Ionicons name="compass-outline" size={12} color={green} />
-                <Text style={styles.discoverBadgeText}>Depuis Découvrir Guelma</Text>
+                <Text style={styles.discoverBadgeText}>Depuis Explorer</Text>
               </View>
             ) : null}
 

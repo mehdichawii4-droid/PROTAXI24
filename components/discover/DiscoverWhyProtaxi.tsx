@@ -14,7 +14,7 @@ const WHY_ITEMS = [
 export default function DiscoverWhyProtaxi() {
   return (
     <>
-      <DiscoverSectionHeader title="Pourquoi PROTAXI tourisme ?" style={styles.header} />
+      <DiscoverSectionHeader title="Pourquoi Explorer PROTAXI ?" style={styles.header} />
       <View style={styles.grid}>
         {WHY_ITEMS.map((item) => (
           <View key={item.label} style={styles.card}>

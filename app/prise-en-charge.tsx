@@ -77,7 +77,7 @@ function DiscoverSourceBadge() {
   return (
     <View style={styles.discoverBadge}>
       <Ionicons name="compass-outline" size={12} color={gold} />
-      <Text style={styles.discoverBadgeText}>Depuis Découvrir Guelma</Text>
+      <Text style={styles.discoverBadgeText}>Depuis Explorer</Text>
     </View>
   );
 }

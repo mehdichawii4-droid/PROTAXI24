@@ -33,7 +33,7 @@ export default function DiscoverHero({ onPressCta }: DiscoverHeroProps) {
             <Text style={styles.pillText}>VITRINE OFFICIELLE PROTAXI</Text>
           </View>
 
-          <Text style={styles.title}>Découvrez Guelma autrement</Text>
+          <Text style={styles.title}>Explorer Guelma</Text>
           <Text style={styles.subtitle}>
             Six expériences privées officielles — patrimoine, nature et bien-être avec votre
             chauffeur PROTAXI.

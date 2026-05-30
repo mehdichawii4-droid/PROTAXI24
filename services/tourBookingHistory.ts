@@ -108,7 +108,9 @@ export function formatTourHistoryPrice(price?: string) {
 
 export function getTourBookingSourceLabel(source?: string) {
   if (source === 'experiences-private') return 'Expériences privées';
-  if (source === 'discover-guelma') return 'Discover Guelma';
+  if (source === 'discover-guelma' || source?.startsWith('discover-v2')) {
+    return 'Explorer Guelma';
+  }
   return source?.trim() || '—';
 }
 
