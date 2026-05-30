@@ -32,6 +32,8 @@ export const CLIENT_BLOCKED_ROUTES = new Set([
   'admin-demo',
   'admin-partners',
   'admin-partner-details',
+  'admin-hotels',
+  'admin-hotel-details',
   'admin-guides',
   'admin-guide-details',
   'driver-profile',
@@ -57,6 +59,8 @@ export const ADMIN_ROUTES = new Set([
   'admin-demo',
   'admin-partners',
   'admin-partner-details',
+  'admin-hotels',
+  'admin-hotel-details',
   'admin-guides',
   'admin-guide-details',
   'driver-profile',
@@ -139,6 +143,13 @@ export const canPartnerLogin = (partnerStatus?: PartnerStatus): boolean => {
   return !PARTNER_LOGIN_BLOCKED_STATUSES.includes(partnerStatus);
 };
 
+function getPartnerLoginBlockCode(profile: ProtaxiUserProfile): string {
+  if (profile.partnerStatus === 'suspended') {
+    return 'protaxi/partner-suspended';
+  }
+  return 'protaxi/account-not-approved';
+}
+
 export const assertProfileCanLogin = (profile: ProtaxiUserProfile): void => {
   if (profile.role === 'guide') {
     if (!canGuideLogin(profile.guideStatus)) {
@@ -152,16 +163,18 @@ export const assertProfileCanLogin = (profile: ProtaxiUserProfile): void => {
   if (profile.role === 'partner') {
     if (profile.partnerStatus) {
       if (!canPartnerLogin(profile.partnerStatus)) {
-        const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
-        (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+        const code = getPartnerLoginBlockCode(profile);
+        const error = new Error(getAuthErrorMessage(code));
+        (error as Error & { code?: string }).code = code;
         throw error;
       }
       return;
     }
 
     if (!profile.isApproved) {
-      const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
-      (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+      const code = getPartnerLoginBlockCode(profile);
+      const error = new Error(getAuthErrorMessage(code));
+      (error as Error & { code?: string }).code = code;
       throw error;
     }
     return;
@@ -273,6 +286,8 @@ export const getAuthErrorMessage = (code?: string, fallback?: string) => {
       return 'Profil utilisateur introuvable.';
     case 'protaxi/account-not-approved':
       return 'Votre compte est en attente de validation.';
+    case 'protaxi/partner-suspended':
+      return 'Votre compte est suspendu.';
     case 'protaxi/phone-not-found':
       return 'Aucun compte associé à ce numéro.';
     case 'protaxi/phone-without-email':
