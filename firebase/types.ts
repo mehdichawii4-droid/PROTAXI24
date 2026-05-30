@@ -77,6 +77,8 @@ export interface ProtaxiUserProfile {
   createdAt: Timestamp | Date | null;
   isOnline: boolean;
   isApproved: boolean;
+  /** Renseigné lorsque role === 'guide' (statut registre guides/{uid}). */
+  guideStatus?: GuideStatus;
   companyName?: string;
   partnerType?: 'hotel' | 'agency' | 'transport';
   contactName?: string;

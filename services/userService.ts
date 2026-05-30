@@ -8,13 +8,14 @@ import {
   setDoc,
   where,
 } from 'firebase/firestore';
-import { db } from '@/firebase/firestore';
+import { db, getGuideDocRef } from '@/firebase/firestore';
 import {
   BOOTSTRAP_ADMIN_EMAIL,
   BOOTSTRAP_ADMIN_PASSWORD,
 } from '@/firebase/config';
 import { getFirebaseAuth } from '@/firebase/authInstance';
-import type { ProtaxiUserProfile, UserCollection } from '@/firebase/types';
+import type { Guide, ProtaxiUserProfile, UserCollection } from '@/firebase/types';
+import { normalizeGuideProfile } from '@/services/guideService';
 import {
   collectionForRole,
   mapProfileData,
@@ -24,12 +25,81 @@ import {
 import { DRIVER_LIVE_OFFLINE_PAYLOAD } from '@/services/driverDispatchService';
 import { devError, devLog } from '@/utils/devLog';
 
-const COLLECTIONS: UserCollection[] = ['admins', 'drivers', 'partners', 'users'];
+const STAFF_COLLECTIONS: UserCollection[] = ['admins', 'drivers', 'partners'];
+const EMAIL_PHONE_LOOKUP_COLLECTIONS: UserCollection[] = ['admins', 'drivers', 'partners'];
+
+export function mapGuideToProtaxiProfile(guide: Guide): ProtaxiUserProfile {
+  return {
+    uid: guide.uid,
+    fullName: guide.displayName,
+    phone: guide.phone,
+    email: guide.email.trim().toLowerCase(),
+    role: 'guide',
+    createdAt: guide.createdAt ?? null,
+    isOnline: false,
+    isApproved: guide.status === 'active',
+    guideStatus: guide.status,
+  };
+}
+
+export async function fetchGuideProfileByUid(
+  uid: string,
+): Promise<ProtaxiUserProfile | null> {
+  const snapshot = await getDoc(getGuideDocRef(uid.trim()));
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  const guide = normalizeGuideProfile(uid, snapshot.data() as Record<string, unknown>);
+  if (!guide) {
+    return null;
+  }
+
+  return mapGuideToProtaxiProfile(guide);
+}
+
+async function fetchGuideProfileByEmail(email: string): Promise<ProtaxiUserProfile | null> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const snapshot = await getDocs(
+    query(collection(db, 'guides'), where('email', '==', normalizedEmail)),
+  );
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const match = snapshot.docs[0];
+  const guide = normalizeGuideProfile(match.id, match.data() as Record<string, unknown>);
+  if (!guide) {
+    return null;
+  }
+
+  return mapGuideToProtaxiProfile(guide);
+}
+
+async function fetchGuideProfileByPhone(phone: string): Promise<ProtaxiUserProfile | null> {
+  const normalizedPhone = normalizePhone(phone);
+  const snapshot = await getDocs(
+    query(collection(db, 'guides'), where('phone', '==', normalizedPhone)),
+  );
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const match = snapshot.docs[0];
+  const guide = normalizeGuideProfile(match.id, match.data() as Record<string, unknown>);
+  if (!guide) {
+    return null;
+  }
+
+  return mapGuideToProtaxiProfile(guide);
+}
 
 export const fetchUserProfileByUid = async (
   uid: string
 ): Promise<ProtaxiUserProfile | null> => {
-  for (const collectionName of COLLECTIONS) {
+  for (const collectionName of STAFF_COLLECTIONS) {
     const snapshot = await getDoc(doc(db, collectionName, uid));
 
     if (snapshot.exists()) {
@@ -41,6 +111,20 @@ export const fetchUserProfileByUid = async (
     }
   }
 
+  const guideProfile = await fetchGuideProfileByUid(uid);
+  if (guideProfile) {
+    return guideProfile;
+  }
+
+  const userSnapshot = await getDoc(doc(db, 'users', uid));
+  if (userSnapshot.exists()) {
+    return mapProfileData(
+      uid,
+      userSnapshot.data() as Record<string, unknown>,
+      'client',
+    );
+  }
+
   return null;
 };
 
@@ -49,7 +133,7 @@ export const fetchUserProfileByEmail = async (
 ): Promise<ProtaxiUserProfile | null> => {
   const normalizedEmail = email.trim().toLowerCase();
 
-  for (const collectionName of COLLECTIONS) {
+  for (const collectionName of EMAIL_PHONE_LOOKUP_COLLECTIONS) {
     const snapshot = await getDocs(
       query(
         collection(db, collectionName),
@@ -67,6 +151,23 @@ export const fetchUserProfileByEmail = async (
     }
   }
 
+  const guideProfile = await fetchGuideProfileByEmail(normalizedEmail);
+  if (guideProfile) {
+    return guideProfile;
+  }
+
+  const clientSnapshot = await getDocs(
+    query(collection(db, 'users'), where('email', '==', normalizedEmail)),
+  );
+  if (!clientSnapshot.empty) {
+    const match = clientSnapshot.docs[0];
+    return mapProfileData(
+      match.id,
+      match.data() as Record<string, unknown>,
+      'client',
+    );
+  }
+
   return null;
 };
 
@@ -75,7 +176,7 @@ export const fetchUserProfileByPhone = async (
 ): Promise<ProtaxiUserProfile | null> => {
   const normalizedPhone = normalizePhone(phone);
 
-  for (const collectionName of COLLECTIONS) {
+  for (const collectionName of EMAIL_PHONE_LOOKUP_COLLECTIONS) {
     const snapshot = await getDocs(
       query(
         collection(db, collectionName),
@@ -91,6 +192,23 @@ export const fetchUserProfileByPhone = async (
         roleFromCollection(collectionName)
       );
     }
+  }
+
+  const guideProfile = await fetchGuideProfileByPhone(normalizedPhone);
+  if (guideProfile) {
+    return guideProfile;
+  }
+
+  const clientSnapshot = await getDocs(
+    query(collection(db, 'users'), where('phone', '==', normalizedPhone)),
+  );
+  if (!clientSnapshot.empty) {
+    const match = clientSnapshot.docs[0];
+    return mapProfileData(
+      match.id,
+      match.data() as Record<string, unknown>,
+      'client',
+    );
   }
 
   return null;
@@ -228,6 +346,11 @@ export const markUserOnlineState = async (
   isOnline: boolean,
   loginStep = 'markUserOnlineState',
 ) => {
+  if (profile.role === 'guide') {
+    devLog('[AUTH] markUserOnlineState skipped for guide', { uid: profile.uid, isOnline });
+    return;
+  }
+
   const collectionName = collectionForRole(profile.role);
   const payload = {
     isOnline,

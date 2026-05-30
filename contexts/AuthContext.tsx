@@ -17,8 +17,12 @@ import {
   logoutUser,
   mapFirebaseAuthError,
   registerClientWithEmail,
+  registerGuideWithEmail,
   restoreSessionUser,
 } from '@/services/authService';
+import { getGuideSelfErrorMessage } from '@/services/guideSelfService';
+import { GuideServiceError } from '@/types/guide';
+import type { GuideFormInput } from '@/types/guide';
 import {
   clearLocalProfileCache,
   syncLocalProfileCache,
@@ -39,6 +43,7 @@ type AuthContextValue = {
     password: string,
     phone: string
   ) => Promise<UserRole>;
+  registerGuide: (email: string, password: string, guideInput: GuideFormInput) => Promise<UserRole>;
   logout: () => Promise<void>;
   clearAuthError: () => void;
 };
@@ -91,6 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    if (user.profile.role === 'guide') {
+      return;
+    }
+
     void registerForPushNotificationsAsync(user.uid, user.profile.role);
   }, [loading, user?.uid, user?.profile.role]);
 
@@ -129,6 +138,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     },
     [persistSession]
+  );
+
+  const registerGuide = useCallback(
+    async (email: string, password: string, guideInput: GuideFormInput) => {
+      setAuthError(null);
+      authOpInFlightRef.current = true;
+
+      try {
+        const sessionUser = await registerGuideWithEmail(email, password, guideInput);
+        await persistSession(sessionUser);
+        return sessionUser.profile.role;
+      } catch (error) {
+        const message =
+          error instanceof GuideServiceError
+            ? getGuideSelfErrorMessage(error)
+            : mapFirebaseAuthError(error);
+        setAuthError(message);
+        throw new Error(message);
+      } finally {
+        authOpInFlightRef.current = false;
+      }
+    },
+    [persistSession],
   );
 
   const registerClient = useCallback(
@@ -180,10 +212,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       loginWithPhoneNumber,
       registerClient,
+      registerGuide,
       logout,
       clearAuthError,
     }),
-    [user, loading, authError, login, loginWithPhoneNumber, registerClient, logout, clearAuthError]
+    [
+      user,
+      loading,
+      authError,
+      login,
+      loginWithPhoneNumber,
+      registerClient,
+      registerGuide,
+      logout,
+      clearAuthError,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

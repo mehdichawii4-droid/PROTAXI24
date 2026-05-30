@@ -2,16 +2,21 @@ import {
   BOOTSTRAP_ADMIN_EMAIL,
   BOOTSTRAP_ADMIN_PASSWORD,
 } from '@/firebase/config';
-import type { ProtaxiUserProfile, UserCollection, UserRole } from '@/firebase/types';
+import type { GuideStatus, ProtaxiUserProfile, UserCollection, UserRole } from '@/firebase/types';
 
 export const ROLE_HOME_ROUTES: Record<UserRole, string> = {
   client: '/',
   driver: '/drivers-dashboard',
   admin: '/admin-dashboard',
   partner: '/partner-dashboard',
-  /** Pas d’app guide en P1 — placeholder pour P2 (registre guides/{uid}). */
-  guide: '/',
+  guide: '/guide-dashboard',
 };
+
+export const GUIDE_ROUTES = new Set([
+  'guide-dashboard',
+  'guide-profile',
+  'guide-register',
+]);
 
 export const CLIENT_BLOCKED_ROUTES = new Set([
   'drivers-dashboard',
@@ -25,6 +30,9 @@ export const CLIENT_BLOCKED_ROUTES = new Set([
   'tour-staff-dashboard',
   'partner-dashboard',
   'partner-new-booking',
+  'guide-dashboard',
+  'guide-profile',
+  'guide-register',
 ]);
 
 export const DRIVER_ROUTES = new Set([
@@ -54,7 +62,7 @@ export const PARTNER_ROUTES = new Set([
   'discover-booking',
 ]);
 
-export const PUBLIC_ROUTES = new Set(['login', 'register']);
+export const PUBLIC_ROUTES = new Set(['login', 'register', 'guide-register']);
 
 export const normalizeRouteKey = (pathname: string) => {
   const routeKey = pathname.replace(/^\//, '').split('/')[0];
@@ -88,10 +96,42 @@ export const canAccessRoute = (
   }
 
   if (role === 'guide') {
-    return false;
+    return GUIDE_ROUTES.has(routeKey);
   }
 
   return false;
+};
+
+const GUIDE_LOGIN_BLOCKED_STATUSES: GuideStatus[] = ['suspended'];
+
+/** Connexion autorisée pour guide draft / pending_review / active ; pas si suspendu. */
+export const canGuideLogin = (guideStatus?: GuideStatus): boolean => {
+  if (!guideStatus) return false;
+  return !GUIDE_LOGIN_BLOCKED_STATUSES.includes(guideStatus);
+};
+
+export const assertProfileCanLogin = (profile: ProtaxiUserProfile): void => {
+  if (profile.role === 'guide') {
+    if (!canGuideLogin(profile.guideStatus)) {
+      const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
+      (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+      throw error;
+    }
+    return;
+  }
+
+  if (!profile.isApproved) {
+    const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
+    (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+    throw error;
+  }
+};
+
+export const canRestoreAuthSession = (profile: ProtaxiUserProfile): boolean => {
+  if (profile.role === 'guide') {
+    return canGuideLogin(profile.guideStatus);
+  }
+  return profile.isApproved;
 };
 
 export const collectionForRole = (role: UserRole): UserCollection => {

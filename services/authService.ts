@@ -11,9 +11,14 @@ import {
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import type { AuthSessionUser } from '@/firebase/types';
 import {
+  assertProfileCanLogin,
+  canRestoreAuthSession,
   getAuthErrorMessage,
   isBootstrapAdminCredentials,
 } from './authUtils';
+import { getGuideSelfErrorMessage, registerGuideProfile } from '@/services/guideSelfService';
+import { GuideServiceError } from '@/types/guide';
+import type { GuideFormInput } from '@/types/guide';
 import {
   isLoginEmailRegistered,
   lookupLoginEmailByPhone,
@@ -31,14 +36,6 @@ const BOOTSTRAP_ADMIN_AUTH_ERRORS = new Set([
   'auth/invalid-credential',
   'auth/invalid-login-credentials',
 ]);
-
-const assertApprovedProfile = (profile: AuthSessionUser['profile']) => {
-  if (!profile.isApproved) {
-    const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
-    (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
-    throw error;
-  }
-};
 
 const buildSessionUser = (
   firebaseUser: User,
@@ -62,7 +59,7 @@ const completeLogin = async (firebaseUser: User): Promise<AuthSessionUser> => {
     throw error;
   }
 
-  assertApprovedProfile(profile);
+  assertProfileCanLogin(profile);
   await markUserOnlineState(profile, true, 'authService/completeLogin');
   return buildSessionUser(firebaseUser, profile);
 };
@@ -152,6 +149,60 @@ export const loginWithPhone = async (
   return loginWithEmail(email, password);
 };
 
+export const registerGuideWithEmail = async (
+  email: string,
+  password: string,
+  guideInput: GuideFormInput,
+): Promise<AuthSessionUser> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (guideInput.email.trim().toLowerCase() !== normalizedEmail) {
+    const error = new Error('L\'email du profil guide doit correspondre au compte.');
+    (error as Error & { code?: string }).code = 'protaxi/guide-email-mismatch';
+    throw error;
+  }
+
+  const emailAlreadyUsed = await isLoginEmailRegistered(normalizedEmail);
+  if (emailAlreadyUsed) {
+    const error = new Error(getAuthErrorMessage('auth/email-already-in-use'));
+    (error as Error & { code?: string }).code = 'auth/email-already-in-use';
+    throw error;
+  }
+
+  const credential = await createUserWithEmailAndPassword(
+    getFirebaseAuth(),
+    normalizedEmail,
+    password,
+  );
+
+  try {
+    await registerGuideProfile(credential.user.uid, {
+      ...guideInput,
+      guideUid: credential.user.uid,
+      email: normalizedEmail,
+    });
+
+    const profile = await resolveProfileForAuthUser(
+      credential.user.uid,
+      credential.user.email,
+    );
+
+    if (!profile || profile.role !== 'guide') {
+      throw new Error(getAuthErrorMessage('protaxi/profile-not-found'));
+    }
+
+    assertProfileCanLogin(profile);
+    await markUserOnlineState(profile, true, 'authService/registerGuideWithEmail');
+    return buildSessionUser(credential.user, profile);
+  } catch (error) {
+    await signOut(getFirebaseAuth());
+    if (error instanceof GuideServiceError) {
+      throw new Error(getGuideSelfErrorMessage(error));
+    }
+    throw error;
+  }
+};
+
 export const registerClientWithEmail = async (
   fullName: string,
   email: string,
@@ -212,7 +263,7 @@ export const restoreSessionUser = async (
     firebaseUser.email
   );
 
-  if (!profile || !profile.isApproved) {
+  if (!profile || !canRestoreAuthSession(profile)) {
     await signOut(getFirebaseAuth());
     return null;
   }

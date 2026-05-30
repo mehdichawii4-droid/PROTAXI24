@@ -8,7 +8,7 @@ import { attemptAutoDispatchForRide } from './autoDispatch';
 
 admin.initializeApp();
 
-const LOGIN_LOOKUP_COLLECTIONS = ['admins', 'drivers', 'partners', 'users'] as const;
+const LOGIN_LOOKUP_COLLECTIONS = ['admins', 'drivers', 'partners', 'guides', 'users'] as const;
 
 function normalizePhoneLookup(phone: string): string {
   return phone.replace(/\s/g, '').replace(/^0/, '+213');
