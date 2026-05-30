@@ -1789,14 +1789,22 @@ useEffect(() => {
           <View style={styles.adminProQuickGrid}>
             <AdminProQuickActionCard
               index={0}
+              label="Hôtels partenaires"
+              subtitle="Validation & statuts hôtel"
+              icon="domain"
+              accent={gold}
+              onPress={() => router.push('/admin-hotels')}
+            />
+            <AdminProQuickActionCard
+              index={1}
               label="Gestion partenaires"
-              subtitle="Comptes hôtel & agence"
+              subtitle="Agences & transport (V1)"
               icon="handshake-outline"
               accent="#60A5FA"
               onPress={() => router.push('/admin-partners')}
             />
             <AdminProQuickActionCard
-              index={1}
+              index={2}
               label="Gestion chauffeurs"
               subtitle="Validation & statuts"
               icon="account-check-outline"
@@ -1804,7 +1812,7 @@ useEffect(() => {
               onPress={() => scrollToSection(driversSectionRef)}
             />
             <AdminProQuickActionCard
-              index={2}
+              index={3}
               label="Gestion réservations"
               subtitle="Courses en direct"
               icon="clipboard-list-outline"
@@ -1812,7 +1820,7 @@ useEffect(() => {
               onPress={() => scrollToSection(reservationsSectionRef)}
             />
             <AdminProQuickActionCard
-              index={3}
+              index={4}
               label="Gestion tourisme"
               subtitle="Excursions & groupes"
               icon="compass-outline"

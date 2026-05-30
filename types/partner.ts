@@ -136,3 +136,43 @@ export type AdminPartnerDetail = Omit<AdminPartnerListItem, 'uid'> & {
   uid: string;
   recentBookings: AdminPartnerBookingPreview[];
 };
+
+/** Liste admin — hôtels partenaires (Phase 2 Lot 9). */
+export type AdminHotelListItem = {
+  uid: string;
+  companyName: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  city?: string;
+  status: PartnerStatus;
+  statusLabel: string;
+  isActive: boolean;
+  descriptionPreview: string;
+  validatedAt?: unknown;
+  updatedAt?: unknown;
+  createdAt?: unknown;
+};
+
+/** Détail admin — hôtel partenaire (Phase 2 Lot 9). */
+export type AdminHotelDetail = {
+  uid: string;
+  companyName: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  address?: string;
+  city?: string;
+  postalCode?: string;
+  receptionPhone?: string;
+  website?: string;
+  description: string;
+  status: PartnerStatus;
+  statusLabel: string;
+  isActive: boolean;
+  validatedAt?: unknown;
+  validatedBy?: string;
+  updatedAt?: unknown;
+  createdAt?: unknown;
+  internalNotes?: string;
+};
