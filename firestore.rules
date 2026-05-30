@@ -458,11 +458,19 @@ service cloud.firestore {
         && resource.data.partnerId == request.auth.uid;
     }
 
+    function isAssignedGuideOnBooking(data) {
+      return isGuide()
+        && data.assignedGuideId is string
+        && data.assignedGuideId.size() > 0
+        && data.assignedGuideId == request.auth.uid;
+    }
+
     function canReadTourBooking(data) {
       return isAdmin()
         || isOwner(data)
         || isPartnerTourBookingOwner(data)
-        || isDriver();
+        || isDriver()
+        || isAssignedGuideOnBooking(data);
     }
 
     function isClientUser() {
@@ -1125,6 +1133,9 @@ service cloud.firestore {
       allow list: if canPartnerListOwnTourBooking();
       allow list: if isOwner(resource.data);
       allow list: if isDriver();
+      allow list: if isGuide()
+        && resource.data.assignedGuideId is string
+        && resource.data.assignedGuideId == request.auth.uid;
 
       allow create: if isSignedIn() && (
         (
