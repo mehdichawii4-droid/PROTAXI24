@@ -2,7 +2,13 @@ import {
   BOOTSTRAP_ADMIN_EMAIL,
   BOOTSTRAP_ADMIN_PASSWORD,
 } from '@/firebase/config';
-import type { GuideStatus, ProtaxiUserProfile, UserCollection, UserRole } from '@/firebase/types';
+import type {
+  GuideStatus,
+  PartnerStatus,
+  ProtaxiUserProfile,
+  UserCollection,
+  UserRole,
+} from '@/firebase/types';
 
 export const ROLE_HOME_ROUTES: Record<UserRole, string> = {
   client: '/',
@@ -32,6 +38,8 @@ export const CLIENT_BLOCKED_ROUTES = new Set([
   'tour-staff-dashboard',
   'partner-dashboard',
   'partner-new-booking',
+  'partner-register',
+  'partner-profile',
   'guide-dashboard',
   'guide-profile',
   'guide-register',
@@ -55,8 +63,10 @@ export const ADMIN_ROUTES = new Set([
   'tour-staff-dashboard',
 ]);
 
-export const PARTNER_ROUTES = new Set([
+/** Routes accessibles au rôle partner (hors routes publiques). */
+export const PARTNER_PROTECTED_ROUTES = new Set([
   'partner-dashboard',
+  'partner-profile',
   'partner-new-booking',
   'hotel',
   'tour-booking',
@@ -64,7 +74,17 @@ export const PARTNER_ROUTES = new Set([
   'discover-booking',
 ]);
 
-export const PUBLIC_ROUTES = new Set(['login', 'register', 'guide-register']);
+export const PARTNER_ROUTES = new Set([
+  'partner-register',
+  ...PARTNER_PROTECTED_ROUTES,
+]);
+
+export const PUBLIC_ROUTES = new Set([
+  'login',
+  'register',
+  'guide-register',
+  'partner-register',
+]);
 
 export const normalizeRouteKey = (pathname: string) => {
   const routeKey = pathname.replace(/^\//, '').split('/')[0];
@@ -105,6 +125,7 @@ export const canAccessRoute = (
 };
 
 const GUIDE_LOGIN_BLOCKED_STATUSES: GuideStatus[] = ['suspended'];
+const PARTNER_LOGIN_BLOCKED_STATUSES: PartnerStatus[] = ['suspended'];
 
 /** Connexion autorisée pour guide draft / pending_review / active ; pas si suspendu. */
 export const canGuideLogin = (guideStatus?: GuideStatus): boolean => {
@@ -112,9 +133,33 @@ export const canGuideLogin = (guideStatus?: GuideStatus): boolean => {
   return !GUIDE_LOGIN_BLOCKED_STATUSES.includes(guideStatus);
 };
 
+/** Connexion autorisée pour partenaire draft / pending_review / active ; pas si suspendu. */
+export const canPartnerLogin = (partnerStatus?: PartnerStatus): boolean => {
+  if (!partnerStatus) return true;
+  return !PARTNER_LOGIN_BLOCKED_STATUSES.includes(partnerStatus);
+};
+
 export const assertProfileCanLogin = (profile: ProtaxiUserProfile): void => {
   if (profile.role === 'guide') {
     if (!canGuideLogin(profile.guideStatus)) {
+      const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
+      (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+      throw error;
+    }
+    return;
+  }
+
+  if (profile.role === 'partner') {
+    if (profile.partnerStatus) {
+      if (!canPartnerLogin(profile.partnerStatus)) {
+        const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
+        (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
+        throw error;
+      }
+      return;
+    }
+
+    if (!profile.isApproved) {
       const error = new Error(getAuthErrorMessage('protaxi/account-not-approved'));
       (error as Error & { code?: string }).code = 'protaxi/account-not-approved';
       throw error;
@@ -133,6 +178,14 @@ export const canRestoreAuthSession = (profile: ProtaxiUserProfile): boolean => {
   if (profile.role === 'guide') {
     return canGuideLogin(profile.guideStatus);
   }
+
+  if (profile.role === 'partner') {
+    if (profile.partnerStatus) {
+      return canPartnerLogin(profile.partnerStatus);
+    }
+    return profile.isApproved;
+  }
+
   return profile.isApproved;
 };
 

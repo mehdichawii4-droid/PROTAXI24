@@ -43,6 +43,8 @@ export default function RootLayout() {
               <Stack.Screen name="guide-register" options={{ headerShown: false }} />
               <Stack.Screen name="guide-dashboard" options={{ headerShown: false }} />
               <Stack.Screen name="guide-profile" options={{ headerShown: false }} />
+              <Stack.Screen name="partner-register" options={{ headerShown: false }} />
+              <Stack.Screen name="partner-profile" options={{ headerShown: false }} />
               <Stack.Screen name="discover-guelma" options={{ headerShown: false }} />
               <Stack.Screen name="discover-booking" options={{ headerShown: false }} />
               <Stack.Screen name="tour-booking" options={{ headerShown: false }} />
