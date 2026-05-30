@@ -32,6 +32,7 @@ export type PartnerFormInput = {
   contactName: string;
   phone: string;
   email: string;
+  description: string;
   address?: string;
   city?: string;
   postalCode?: string;
@@ -53,6 +54,7 @@ export type PartnerSelfProfile = {
   status: PartnerStatus;
   statusLabel: string;
   isActive: boolean;
+  description: string;
   address?: string;
   city?: string;
   postalCode?: string;

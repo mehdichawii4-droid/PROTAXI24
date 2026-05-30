@@ -12,6 +12,7 @@ import type {
   PartnerValidationResult,
 } from '@/types/partner';
 import { PartnerServiceError } from '@/types/partner';
+import { validateHotelDescription } from '@/utils/partnerProfileFormValidation';
 
 const ALLOWED_CREATE_STATUSES: PartnerStatus[] = ['draft', 'pending_review'];
 const SELF_EDITABLE_STATUSES: PartnerStatus[] = ['draft', 'pending_review'];
@@ -107,6 +108,7 @@ export function normalizePartnerProfile(
     email: String(data.email || '').trim().toLowerCase(),
     isActive,
     status,
+    description: String(data.description || '').trim(),
     address: normalizeOptionalString(data.address),
     city: normalizeOptionalString(data.city),
     postalCode: normalizeOptionalString(data.postalCode),
@@ -170,6 +172,10 @@ export function validatePartnerInput(
     });
   }
 
+  if (options?.hotelSelf) {
+    errors.push(...validateHotelDescription(input.description));
+  }
+
   errors.push(...validateOptionalUrlField('website', input.website));
 
   if (mode === 'create' && input.status && !ALLOWED_CREATE_STATUSES.includes(input.status)) {
@@ -214,6 +220,7 @@ export function buildPartnerFirestorePayload(
     email: input.email.trim().toLowerCase(),
     status,
     isActive,
+    description: input.description.trim(),
     updatedAt: options.updatedAt,
     createdAt: options.createdAt,
   };
@@ -256,6 +263,7 @@ export function partnerFormInputFromPartner(partner: Partner): PartnerFormInput 
     contactName: partner.contactName,
     phone: partner.phone,
     email: partner.email,
+    description: partner.description,
     address: partner.address,
     city: partner.city,
     postalCode: partner.postalCode,
@@ -278,6 +286,7 @@ export function mapPartnerToSelfProfile(partner: Partner): PartnerSelfProfile {
     status: partner.status,
     statusLabel: getPartnerStatusLabel(partner.status),
     isActive: partner.isActive,
+    description: partner.description,
     address: partner.address,
     city: partner.city,
     postalCode: partner.postalCode,

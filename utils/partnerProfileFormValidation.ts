@@ -1,4 +1,4 @@
-import type { PartnerFieldError } from '@/types/partner';
+import type { PartnerFieldError, PartnerFormInput } from '@/types/partner';
 import type { HotelPartnerProfileFormValues } from '@/types/partnerProfileForm';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -13,8 +13,8 @@ export function getHotelPartnerProfileFieldError(
   return errors.find((item) => item.field === field)?.message;
 }
 
-export function validateHotelDescription(description: string): PartnerFieldError[] {
-  const normalized = description.trim();
+export function validateHotelDescription(description: string | undefined): PartnerFieldError[] {
+  const normalized = String(description || '').trim();
   const errors: PartnerFieldError[] = [];
 
   if (!normalized) {
@@ -91,4 +91,24 @@ export function validateHotelPartnerProfileFormValues(
 
 export function isHotelPartnerProfileFormValid(values: HotelPartnerProfileFormValues): boolean {
   return validateHotelPartnerProfileFormValues(values).length === 0;
+}
+
+/** Mappe le formulaire hôtel vers PartnerFormInput (inscription / self-service). */
+export function hotelPartnerFormValuesToPartnerInput(
+  partnerUid: string,
+  values: HotelPartnerProfileFormValues,
+  email: string,
+): PartnerFormInput {
+  return {
+    partnerUid: partnerUid.trim(),
+    companyName: values.companyName.trim(),
+    partnerType: 'hotel',
+    contactName: values.contactName.trim(),
+    phone: values.phone.trim(),
+    email: email.trim().toLowerCase(),
+    description: values.description.trim(),
+    address: values.address.trim(),
+    city: values.city.trim(),
+    website: values.website.trim() || undefined,
+  };
 }

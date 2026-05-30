@@ -71,6 +71,8 @@ const invalid = validatePartnerInput(
 assert.equal(invalid.ok, false);
 assert.ok(invalid.errors.length >= 4);
 
+const validDesc = 'a'.repeat(30);
+
 const validHotel = validatePartnerInput(
   {
     partnerUid: 'uid3',
@@ -79,6 +81,9 @@ const validHotel = validatePartnerInput(
     contactName: 'Manager',
     phone: '+213555',
     email: 'ok@hotel.com',
+    description: validDesc,
+    address: '12 rue test',
+    city: 'Guelma',
     status: 'pending_review',
   },
   'create',
@@ -94,11 +99,15 @@ const payload = buildPartnerFirestorePayload(
     contactName: 'Manager',
     phone: '+213555',
     email: 'ok@hotel.com',
+    description: validDesc,
+    address: '12 rue test',
+    city: 'Guelma',
   },
   { status: 'pending_review', createdAt: new Date(), updatedAt: new Date() },
 );
 assert.equal(payload.status, 'pending_review');
 assert.equal(payload.isActive, false);
+assert.equal(payload.description, validDesc);
 assert.equal(resolveIsActiveForStatus('active'), true);
 assert.equal(getPartnerStatusLabel('pending_review'), 'En attente de validation');
 

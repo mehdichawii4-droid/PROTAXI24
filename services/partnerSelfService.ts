@@ -81,6 +81,7 @@ function sanitizeSelfFormInput(partnerUid: string, input: PartnerFormInput): Par
     contactName: input.contactName,
     phone: input.phone,
     email: input.email,
+    description: input.description.trim(),
     address: input.address?.trim() || undefined,
     city: input.city?.trim() || undefined,
     postalCode: input.postalCode?.trim() || undefined,

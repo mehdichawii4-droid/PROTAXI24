@@ -1,5 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { useEffect, useMemo, useState } from 'react';
@@ -27,6 +27,7 @@ const bg = '#050505';
 const card = '#0E0E0E';
 const border = '#262626';
 const green = '#8BC53F';
+const gold = '#D4A017';
 const muted = '#8A8A8A';
 
 function toCreatedAtMs(value: unknown): number {
@@ -98,7 +99,16 @@ function mapTourBookingToPartnerItem(
   };
 }
 
+function normalizeRegisteredParam(value: string | string[] | undefined): boolean {
+  if (value === '1') return true;
+  if (Array.isArray(value)) return value[0] === '1';
+  return false;
+}
+
 export default function PartnerDashboardScreen() {
+  const { registered } = useLocalSearchParams<{ registered?: string | string[] }>();
+  const showRegisteredBanner = normalizeRegisteredParam(registered);
+
   const { user, profile, role } = useAuth();
   const { confirmLogout } = useAuthLogout();
   const [rides, setRides] = useState<PartnerReservationItem[]>([]);
@@ -209,6 +219,20 @@ export default function PartnerDashboardScreen() {
       <StatusBar style="light" />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        {showRegisteredBanner ? (
+          <View style={styles.successBanner}>
+            <Ionicons name="checkmark-circle" size={22} color={green} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.successTitle}>Profil en attente de validation</Text>
+              <Text style={styles.successText}>
+                Votre établissement a bien été enregistré. L&apos;équipe PROTAXI valide votre
+                dossier avant activation des réservations partenaire.
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="clock-outline" size={20} color={gold} />
+          </View>
+        ) : null}
+
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View style={styles.badge}>
@@ -306,6 +330,19 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 40,
   },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: 'rgba(139,197,63,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.35)',
+  },
+  successTitle: { color: '#FFF', fontSize: 14, fontWeight: '900', marginBottom: 4 },
+  successText: { color: '#B8D4A0', fontSize: 12, lineHeight: 17 },
   header: {
     marginBottom: 20,
   },

@@ -234,6 +234,14 @@ export default function LoginScreen() {
               <MaterialCommunityIcons name="account-tie-outline" size={18} color={green} />
               <Text style={styles.guideLinkText}>Devenir guide PROTAXI</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.partnerLinkBtn}
+              onPress={() => router.push(PROTAXI_ROUTES.partnerRegister)}
+            >
+              <MaterialCommunityIcons name="domain" size={18} color={gold} />
+              <Text style={styles.partnerLinkText}>Inscrire mon hôtel partenaire</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.bootstrapCard}>
@@ -430,6 +438,23 @@ const styles = StyleSheet.create({
   },
   guideLinkText: {
     color: green,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  partnerLinkBtn: {
+    marginTop: 10,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.35)',
+    backgroundColor: 'rgba(212,160,23,0.08)',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  partnerLinkText: {
+    color: gold,
     fontSize: 14,
     fontWeight: '900',
   },

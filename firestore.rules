@@ -152,6 +152,12 @@ service cloud.firestore {
       return status in ['draft', 'pending_review', 'active', 'suspended'];
     }
 
+    function isValidPartnerDescription(description) {
+      return description is string
+        && description.size() >= 30
+        && description.size() <= 500;
+    }
+
     function hasValidPartnerOptionalFields(data) {
       return (!('address' in data) || (data.address is string && data.address.size() > 0))
         && (!('city' in data) || (data.city is string && data.city.size() > 0))
@@ -180,6 +186,7 @@ service cloud.firestore {
         && data.phone.size() > 0
         && data.email is string
         && data.email.size() > 0
+        && isValidPartnerDescription(data.description)
         && data.isActive is bool
         && isValidPartnerStatus(data.status)
         && data.createdAt is timestamp

@@ -81,6 +81,8 @@ export interface Partner {
   email: string;
   isActive: boolean;
   status: PartnerStatus;
+  /** Présentation de l'établissement (30–500 caractères). */
+  description: string;
   address?: string;
   city?: string;
   postalCode?: string;
