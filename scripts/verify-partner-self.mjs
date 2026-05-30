@@ -32,6 +32,8 @@ assert.equal(
   'Adresse email invalide.\nTéléphone requis.',
 );
 
+const validDescription = 'a'.repeat(30);
+
 const hotelCreate = validatePartnerInput(
   {
     partnerUid: 'u1',
@@ -40,6 +42,7 @@ const hotelCreate = validatePartnerInput(
     contactName: 'Contact',
     phone: '+2131',
     email: 'a@b.com',
+    description: validDescription,
     status: 'pending_review',
   },
   'create',

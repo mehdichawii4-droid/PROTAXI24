@@ -13,23 +13,27 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { getFirebaseAuth } from '@/firebase/authInstance';
+import { useAuth } from '@/hooks/useAuth';
 import {
   createPartnerBooking,
   getPartnerBookingErrorMessage,
 } from '@/services/partnerBookingService';
 import {
-  fetchPartnerProfile,
-  getPartnerDisplayName,
-  getPartnerTypeLabel,
-} from '@/services/partnerService';
+  fetchMyPartnerProfile,
+  getPartnerSelfErrorMessage,
+} from '@/services/partnerSelfService';
+import { getPartnerTypeLabel } from '@/services/partnerService';
 import type { PartnerBookingType } from '@/types/partner';
+import type { PartnerSelfProfile } from '@/types/partner';
+import type { PartnerStatus } from '@/firebase/types';
 import { devError, devLog } from '@/utils/devLog';
+import { isPartnerOperational } from '@/utils/partnerSelfProfileDisplay';
 
 const bg = '#050505';
 const card = '#0E0E0E';
 const border = '#262626';
 const green = '#8BC53F';
+const gold = '#D4A017';
 const muted = '#8A8A8A';
 
 const BOOKING_TYPES: Array<{ id: PartnerBookingType; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
@@ -37,11 +41,25 @@ const BOOKING_TYPES: Array<{ id: PartnerBookingType; label: string; icon: keyof 
   { id: 'tour', label: 'Excursion', icon: 'compass-outline' },
 ];
 
+function getLockedMessage(status: PartnerStatus): string {
+  switch (status) {
+    case 'pending_review':
+      return 'Votre profil est en attente de validation. Les réservations seront disponibles après activation par PROTAXI.';
+    case 'draft':
+      return 'Complétez et envoyez votre profil en validation depuis « Modifier mon profil » avant de créer une réservation.';
+    case 'suspended':
+      return 'Votre compte est suspendu. Contactez le support PROTAXI pour plus d’informations.';
+    default:
+      return 'La création de réservations partenaire est réservée aux établissements au statut actif.';
+  }
+}
+
 export default function PartnerNewBookingScreen() {
+  const { user } = useAuth();
   const [loadingPartner, setLoadingPartner] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [partnerName, setPartnerName] = useState('Partenaire PROTAXI');
-  const [partnerTypeLabel, setPartnerTypeLabel] = useState('Hôtel');
+  const [partner, setPartner] = useState<PartnerSelfProfile | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
@@ -52,21 +70,32 @@ export default function PartnerNewBookingScreen() {
   const [notes, setNotes] = useState('');
   const [bookingType, setBookingType] = useState<PartnerBookingType>('transfer');
 
+  const canOperate = partner ? isPartnerOperational(partner.status) : false;
+  const partnerName = partner?.companyName || 'Partenaire PROTAXI';
+  const partnerTypeLabel = partner ? getPartnerTypeLabel(partner.partnerType) : 'Hôtel';
+
   useEffect(() => {
-    const uid = getFirebaseAuth().currentUser?.uid;
+    const uid = user?.uid;
 
     if (!uid) {
       devError('[PARTNER BOOKING] missing auth uid');
+      setPartner(null);
+      setLoadError('Session partenaire introuvable. Reconnectez-vous.');
       setLoadingPartner(false);
       return;
     }
 
     void (async () => {
+      setLoadingPartner(true);
+      setLoadError(null);
+
       try {
         devLog('[PARTNER BOOKING] load partner profile', { uid });
-        const profile = await fetchPartnerProfile(uid);
+        const profile = await fetchMyPartnerProfile(uid);
 
         if (!profile) {
+          setPartner(null);
+          setLoadError('Impossible de charger votre profil partenaire.');
           Alert.alert(
             'Profil introuvable',
             'Impossible de charger votre profil partenaire.',
@@ -75,20 +104,23 @@ export default function PartnerNewBookingScreen() {
           return;
         }
 
-        setPartnerName(getPartnerDisplayName(profile));
-        setPartnerTypeLabel(getPartnerTypeLabel(profile.partnerType));
+        setPartner(profile);
         devLog('[PARTNER BOOKING] partner profile loaded', {
           uid,
-          partnerName: getPartnerDisplayName(profile),
+          status: profile.status,
+          partnerName: profile.companyName,
         });
       } catch (error) {
+        setPartner(null);
+        const message = getPartnerSelfErrorMessage(error);
+        setLoadError(message);
         devError('[PARTNER BOOKING] partner profile load failed', error);
-        Alert.alert('Erreur', 'Impossible de charger le profil partenaire.');
+        Alert.alert('Erreur', message);
       } finally {
         setLoadingPartner(false);
       }
     })();
-  }, []);
+  }, [user?.uid]);
 
   const validateForm = () => {
     if (!clientName.trim()) return 'Nom du client requis.';
@@ -105,13 +137,21 @@ export default function PartnerNewBookingScreen() {
   };
 
   const handleSubmit = async () => {
+    if (!canOperate) {
+      Alert.alert(
+        'Réservation indisponible',
+        partner ? getLockedMessage(partner.status) : 'Partenaire non actif.',
+      );
+      return;
+    }
+
     const validationError = validateForm();
     if (validationError) {
       Alert.alert('Formulaire incomplet', validationError);
       return;
     }
 
-    const partnerUid = getFirebaseAuth().currentUser?.uid;
+    const partnerUid = user?.uid;
     if (!partnerUid) {
       Alert.alert('Session expirée', 'Reconnectez-vous pour créer une réservation.');
       return;
@@ -181,126 +221,148 @@ export default function PartnerNewBookingScreen() {
           <Text style={styles.meta}>{partnerTypeLabel} · source partenaire</Text>
         </View>
 
-        <Text style={styles.label}>Type de réservation</Text>
-        <View style={styles.typeRow}>
-          {BOOKING_TYPES.map((type) => {
-            const active = bookingType === type.id;
-            return (
-              <TouchableOpacity
-                key={type.id}
-                style={[styles.typeChip, active && styles.typeChipActive]}
-                onPress={() => setBookingType(type.id)}
-              >
-                <Ionicons name={type.icon} size={16} color={active ? '#050505' : green} />
-                <Text style={[styles.typeChipText, active && styles.typeChipTextActive]}>
-                  {type.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>Nom du client</Text>
-          <TextInput
-            style={styles.input}
-            value={clientName}
-            onChangeText={setClientName}
-            placeholder="Nom complet du client"
-            placeholderTextColor={muted}
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>Téléphone client</Text>
-          <TextInput
-            style={styles.input}
-            value={clientPhone}
-            onChangeText={setClientPhone}
-            placeholder="+213..."
-            placeholderTextColor={muted}
-            keyboardType="phone-pad"
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>Prise en charge</Text>
-          <TextInput
-            style={styles.input}
-            value={pickup}
-            onChangeText={setPickup}
-            placeholder="Hôtel, adresse, aéroport..."
-            placeholderTextColor={muted}
-          />
-        </View>
-
-        <View style={styles.field}>
-          <Text style={styles.label}>
-            {bookingType === 'tour' ? 'Excursion / destination' : 'Destination'}
-          </Text>
-          <TextInput
-            style={styles.input}
-            value={destination}
-            onChangeText={setDestination}
-            placeholder={
-              bookingType === 'tour'
-                ? 'Ex. Guelma Antique, Hammam Debagh...'
-                : 'Ex. Aéroport Constantine, Centre-ville...'
-            }
-            placeholderTextColor={muted}
-          />
-        </View>
-
-        <View style={styles.row}>
-          <View style={[styles.field, styles.halfField]}>
-            <Text style={styles.label}>Date</Text>
-            <TextInput
-              style={styles.input}
-              value={date}
-              onChangeText={setDate}
-              placeholder="JJ/MM/AAAA"
-              placeholderTextColor={muted}
-            />
+        {loadError ? (
+          <View style={styles.errorCard}>
+            <Ionicons name="alert-circle-outline" size={22} color="#FF5A5A" />
+            <Text style={styles.errorText}>{loadError}</Text>
           </View>
-          <View style={[styles.field, styles.halfField]}>
-            <Text style={styles.label}>Heure</Text>
-            <TextInput
-              style={styles.input}
-              value={time}
-              onChangeText={setTime}
-              placeholder="HH:MM"
-              placeholderTextColor={muted}
-            />
+        ) : null}
+
+        {!canOperate && partner ? (
+          <View style={styles.lockedCard}>
+            <Ionicons name="lock-closed-outline" size={22} color={gold} />
+            <Text style={styles.lockedTitle}>Réservation indisponible</Text>
+            <Text style={styles.lockedText}>{getLockedMessage(partner.status)}</Text>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.back()}>
+              <Text style={styles.secondaryBtnText}>Retour au dashboard</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        ) : null}
 
-        <View style={styles.field}>
-          <Text style={styles.label}>Notes</Text>
-          <TextInput
-            style={[styles.input, styles.notesInput]}
-            value={notes}
-            onChangeText={setNotes}
-            placeholder="Informations complémentaires (optionnel)"
-            placeholderTextColor={muted}
-            multiline
-            textAlignVertical="top"
-          />
-        </View>
+        {canOperate ? (
+          <>
+            <Text style={styles.label}>Type de réservation</Text>
+            <View style={styles.typeRow}>
+              {BOOKING_TYPES.map((type) => {
+                const active = bookingType === type.id;
+                return (
+                  <TouchableOpacity
+                    key={type.id}
+                    style={[styles.typeChip, active && styles.typeChipActive]}
+                    onPress={() => setBookingType(type.id)}
+                  >
+                    <Ionicons name={type.icon} size={16} color={active ? '#050505' : green} />
+                    <Text style={[styles.typeChipText, active && styles.typeChipTextActive]}>
+                      {type.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-        <TouchableOpacity
-          style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
-          onPress={() => void handleSubmit()}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#050505" />
-          ) : (
-            <>
-              <Ionicons name="checkmark-circle-outline" size={22} color="#050505" />
-              <Text style={styles.submitBtnText}>Créer la réservation</Text>
-            </>
-          )}
-        </TouchableOpacity>
+            <View style={styles.field}>
+              <Text style={styles.label}>Nom du client</Text>
+              <TextInput
+                style={styles.input}
+                value={clientName}
+                onChangeText={setClientName}
+                placeholder="Nom complet du client"
+                placeholderTextColor={muted}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Téléphone client</Text>
+              <TextInput
+                style={styles.input}
+                value={clientPhone}
+                onChangeText={setClientPhone}
+                placeholder="+213..."
+                placeholderTextColor={muted}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Prise en charge</Text>
+              <TextInput
+                style={styles.input}
+                value={pickup}
+                onChangeText={setPickup}
+                placeholder="Hôtel, adresse, aéroport..."
+                placeholderTextColor={muted}
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>
+                {bookingType === 'tour' ? 'Excursion / destination' : 'Destination'}
+              </Text>
+              <TextInput
+                style={styles.input}
+                value={destination}
+                onChangeText={setDestination}
+                placeholder={
+                  bookingType === 'tour'
+                    ? 'Ex. Guelma Antique, Hammam Debagh...'
+                    : 'Ex. Aéroport Constantine, Centre-ville...'
+                }
+                placeholderTextColor={muted}
+              />
+            </View>
+
+            <View style={styles.row}>
+              <View style={[styles.field, styles.halfField]}>
+                <Text style={styles.label}>Date</Text>
+                <TextInput
+                  style={styles.input}
+                  value={date}
+                  onChangeText={setDate}
+                  placeholder="JJ/MM/AAAA"
+                  placeholderTextColor={muted}
+                />
+              </View>
+              <View style={[styles.field, styles.halfField]}>
+                <Text style={styles.label}>Heure</Text>
+                <TextInput
+                  style={styles.input}
+                  value={time}
+                  onChangeText={setTime}
+                  placeholder="HH:MM"
+                  placeholderTextColor={muted}
+                />
+              </View>
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Notes</Text>
+              <TextInput
+                style={[styles.input, styles.notesInput]}
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Informations complémentaires (optionnel)"
+                placeholderTextColor={muted}
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
+              onPress={() => void handleSubmit()}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#050505" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle-outline" size={22} color="#050505" />
+                  <Text style={styles.submitBtnText}>Créer la réservation</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -355,6 +417,55 @@ const styles = StyleSheet.create({
     color: muted,
     fontSize: 13,
     marginTop: 4,
+  },
+  errorCard: {
+    backgroundColor: 'rgba(255,90,90,0.08)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,90,90,0.25)',
+    padding: 16,
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  errorText: {
+    flex: 1,
+    color: '#FFB4B4',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  lockedCard: {
+    backgroundColor: 'rgba(212,160,23,0.08)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.3)',
+    padding: 18,
+    alignItems: 'center',
+    gap: 10,
+  },
+  lockedTitle: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  lockedText: {
+    color: muted,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  secondaryBtn: {
+    marginTop: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: border,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  secondaryBtnText: {
+    color: '#FFF',
+    fontWeight: '700',
   },
   label: {
     color: '#FFF',

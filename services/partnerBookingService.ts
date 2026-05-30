@@ -2,21 +2,17 @@ import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/firebaseConfig';
 import { getTourBookingsCollectionRef } from '@/firebase/firestore';
 import { buildPartnerReservationFields } from '@/services/partnerService';
-import type { PartnerBookingType } from '@/types/partner';
+import {
+  buildPartnerTransferRidePayload,
+  type PartnerNewBookingInput,
+} from '@/services/partnerBookingPayload';
 import { devError, devLog } from '@/utils/devLog';
 
-export type PartnerNewBookingInput = {
-  partnerUid: string;
-  partnerName: string;
-  clientName: string;
-  clientPhone: string;
-  pickup: string;
-  destination: string;
-  date: string;
-  time: string;
-  bookingType: PartnerBookingType;
-  notes: string;
-};
+export type { PartnerNewBookingInput } from '@/services/partnerBookingPayload';
+export {
+  buildPartnerTransferRidePayload,
+  PARTNER_TRANSFER_PRICE_LABEL,
+} from '@/services/partnerBookingPayload';
 
 export async function createPartnerBooking(input: PartnerNewBookingInput) {
   const partnerFields = buildPartnerReservationFields(input.partnerUid, input.partnerName);
@@ -31,27 +27,9 @@ export async function createPartnerBooking(input: PartnerNewBookingInput) {
 
   if (input.bookingType === 'transfer') {
     const docRef = await addDoc(collection(db, 'rides'), {
-      clientUid: input.partnerUid,
-      clientName: input.clientName,
-      client: input.clientName,
-      phone: input.clientPhone,
-      clientPhone: input.clientPhone,
-      service: 'Transfert partenaire',
-      departure: input.pickup,
-      destination: input.destination,
-      address: input.pickup,
-      date: input.date,
-      time: input.time,
-      notes: input.notes,
-      status: 'En attente',
-      source: 'partner',
-      driverId: '',
-      driverName: '',
-      driverPhone: '',
-      driverCar: '',
+      ...buildPartnerTransferRidePayload(input),
       createdAt: now,
       updatedAt: now,
-      ...partnerFields,
     });
 
     devLog('[PARTNER BOOKING] ride created', { rideId: docRef.id });
