@@ -49,6 +49,11 @@ const CHECKS = [
     args: ['tsx', 'scripts/verify-partner-booking.mjs'],
   },
   {
+    label: 'guide-missions',
+    command: 'npx',
+    args: ['tsx', 'scripts/verify-guide-missions.mjs'],
+  },
+  {
     label: 'partner-status-migration-lib',
     command: 'node',
     args: ['scripts/verify-partner-status-migration.mjs'],
