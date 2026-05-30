@@ -1,9 +1,11 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -12,15 +14,17 @@ import {
   View,
 } from 'react-native';
 import { db } from '@/firebaseConfig';
+import type { PartnerStatus } from '@/firebase/types';
 import { useAuth } from '@/hooks/useAuth';
-import { useAuthLogout } from '@/hooks/useAuthLogout';
-import {
-  getPartnerDisplayName,
-  getPartnerTypeLabel,
-  normalizePartnerProfile,
-} from '@/services/partnerService';
+import { fetchMyPartnerProfile, getPartnerSelfErrorMessage } from '@/services/partnerSelfService';
+import type { PartnerSelfProfile } from '@/types/partner';
 import type { PartnerReservationItem } from '@/types/partner';
 import { devError, devLog } from '@/utils/devLog';
+import {
+  formatPartnerTimestamp,
+  formatShortDescription,
+  isPartnerOperational,
+} from '@/utils/partnerSelfProfileDisplay';
 import { PROTAXI_ROUTES } from '@/utils/navigation';
 
 const bg = '#050505';
@@ -29,10 +33,66 @@ const border = '#262626';
 const green = '#8BC53F';
 const gold = '#D4A017';
 const muted = '#8A8A8A';
+const red = '#FF5A5A';
+
+function normalizeRegisteredParam(value: string | string[] | undefined): boolean {
+  if (value === '1') return true;
+  if (Array.isArray(value)) return value[0] === '1';
+  return false;
+}
+
+function getStatusStyle(status: PartnerStatus) {
+  switch (status) {
+    case 'active':
+      return { pill: styles.statusActive, text: styles.statusTextActive };
+    case 'suspended':
+      return { pill: styles.statusSuspended, text: styles.statusTextSuspended };
+    case 'pending_review':
+      return { pill: styles.statusPending, text: styles.statusTextPending };
+    default:
+      return { pill: styles.statusDraft, text: styles.statusTextMuted };
+  }
+}
+
+function getStatusHint(status: PartnerStatus): string | null {
+  switch (status) {
+    case 'pending_review':
+      return 'Profil en attente de validation — les réservations partenaire seront disponibles après activation.';
+    case 'active':
+      return 'Partenaire validé — vous pouvez créer des réservations pour vos clients.';
+    case 'suspended':
+      return 'Compte suspendu — contactez le support PROTAXI.';
+    case 'draft':
+      return 'Complétez et envoyez votre profil en validation depuis « Modifier mon profil ».';
+    default:
+      return null;
+  }
+}
+
+function DashboardInfoRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.infoRow}>
+      <View style={styles.infoLeft}>
+        <Ionicons name={icon} size={16} color={gold} />
+        <Text style={styles.infoLabel}>{label}</Text>
+      </View>
+      <Text style={styles.infoValue} numberOfLines={3}>
+        {value}
+      </Text>
+    </View>
+  );
+}
 
 function toCreatedAtMs(value: unknown): number {
   if (!value) return 0;
-
   if (
     typeof value === 'object' &&
     value !== null &&
@@ -41,11 +101,7 @@ function toCreatedAtMs(value: unknown): number {
   ) {
     return (value as { toDate: () => Date }).toDate().getTime();
   }
-
-  if (value instanceof Date) {
-    return value.getTime();
-  }
-
+  if (value instanceof Date) return value.getTime();
   const parsed = Date.parse(String(value));
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -53,7 +109,6 @@ function toCreatedAtMs(value: unknown): number {
 function formatDateLabel(value: unknown, fallback = '—') {
   const ms = toCreatedAtMs(value);
   if (!ms) return fallback;
-
   return new Date(ms).toLocaleDateString('fr-FR', {
     day: '2-digit',
     month: 'short',
@@ -99,52 +154,65 @@ function mapTourBookingToPartnerItem(
   };
 }
 
-function normalizeRegisteredParam(value: string | string[] | undefined): boolean {
-  if (value === '1') return true;
-  if (Array.isArray(value)) return value[0] === '1';
-  return false;
-}
-
 export default function PartnerDashboardScreen() {
+  const { user, logout } = useAuth();
   const { registered } = useLocalSearchParams<{ registered?: string | string[] }>();
   const showRegisteredBanner = normalizeRegisteredParam(registered);
 
-  const { user, profile, role } = useAuth();
-  const { confirmLogout } = useAuthLogout();
+  const [partner, setPartner] = useState<PartnerSelfProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
   const [rides, setRides] = useState<PartnerReservationItem[]>([]);
   const [bookings, setBookings] = useState<PartnerReservationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [reservationsLoading, setReservationsLoading] = useState(false);
 
   const partnerId = user?.uid ?? '';
-  const partnerProfile = useMemo(
-    () =>
-      normalizePartnerProfile(partnerId, {
-        companyName: profile?.companyName,
-        partnerType: profile?.partnerType,
-        contactName: profile?.contactName || profile?.fullName,
-        phone: profile?.phone,
-        email: profile?.email,
-        isActive: profile?.isApproved,
-      }),
-    [partnerId, profile],
+  const canOperate = partner ? isPartnerOperational(partner.status) : false;
+
+  const loadProfile = useCallback(async () => {
+    const uid = user?.uid;
+    if (!uid) {
+      setPartner(null);
+      setProfileError('Session partenaire introuvable. Reconnectez-vous.');
+      setProfileLoading(false);
+      return;
+    }
+
+    setProfileLoading(true);
+    setProfileError(null);
+
+    try {
+      const profile = await fetchMyPartnerProfile(uid);
+      if (!profile) {
+        setPartner(null);
+        setProfileError('Profil hôtel introuvable. Contactez le support PROTAXI.');
+        return;
+      }
+      setPartner(profile);
+    } catch (err) {
+      setPartner(null);
+      setProfileError(getPartnerSelfErrorMessage(err));
+    } finally {
+      setProfileLoading(false);
+    }
+  }, [user?.uid]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadProfile();
+    }, [loadProfile]),
   );
-  const partnerName = getPartnerDisplayName(partnerProfile);
 
   useEffect(() => {
-    if (!partnerId || role !== 'partner') {
+    if (!partnerId || !canOperate) {
       setRides([]);
       setBookings([]);
-      setLoading(false);
+      setReservationsLoading(false);
       return undefined;
     }
 
-    devLog('[PARTNER DASHBOARD] mount', {
-      partnerId,
-      partnerName,
-      partnerType: partnerProfile.partnerType,
-    });
-
-    setLoading(true);
+    setReservationsLoading(true);
 
     const ridesQuery = query(
       collection(db, 'rides'),
@@ -161,28 +229,28 @@ export default function PartnerDashboardScreen() {
     const unsubscribeRides = onSnapshot(
       ridesQuery,
       (snapshot) => {
-        const items = snapshot.docs.map((docSnap) =>
-          mapRideToPartnerItem(docSnap.id, docSnap.data() as Record<string, unknown>),
+        setRides(
+          snapshot.docs.map((docSnap) =>
+            mapRideToPartnerItem(docSnap.id, docSnap.data() as Record<string, unknown>),
+          ),
         );
-        devLog('[PARTNER DASHBOARD] rides snapshot', { count: items.length });
-        setRides(items);
-        setLoading(false);
+        setReservationsLoading(false);
       },
       (error) => {
         devError('[PARTNER DASHBOARD] rides snapshot denied', error);
         setRides([]);
-        setLoading(false);
+        setReservationsLoading(false);
       },
     );
 
     const unsubscribeBookings = onSnapshot(
       bookingsQuery,
       (snapshot) => {
-        const items = snapshot.docs.map((docSnap) =>
-          mapTourBookingToPartnerItem(docSnap.id, docSnap.data() as Record<string, unknown>),
+        setBookings(
+          snapshot.docs.map((docSnap) =>
+            mapTourBookingToPartnerItem(docSnap.id, docSnap.data() as Record<string, unknown>),
+          ),
         );
-        devLog('[PARTNER DASHBOARD] tourBookings snapshot', { count: items.length });
-        setBookings(items);
       },
       (error) => {
         devError('[PARTNER DASHBOARD] tourBookings snapshot denied', error);
@@ -194,11 +262,12 @@ export default function PartnerDashboardScreen() {
       unsubscribeRides();
       unsubscribeBookings();
     };
-  }, [partnerId, partnerName, partnerProfile.partnerType, role]);
+  }, [partnerId, canOperate]);
 
-  const reservations = useMemo(() => {
-    return [...rides, ...bookings].sort((a, b) => b.createdAtMs - a.createdAtMs);
-  }, [rides, bookings]);
+  const reservations = useMemo(
+    () => [...rides, ...bookings].sort((a, b) => b.createdAtMs - a.createdAtMs),
+    [rides, bookings],
+  );
 
   const stats = useMemo(
     () => ({
@@ -209,9 +278,13 @@ export default function PartnerDashboardScreen() {
     [reservations.length, rides.length, bookings.length],
   );
 
+  const statusStyle = partner ? getStatusStyle(partner.status) : null;
+  const statusHint = partner ? getStatusHint(partner.status) : null;
+
   const openNewReservation = () => {
-    devLog('[PARTNER DASHBOARD] navigate new booking', { partnerId, partnerName });
-    router.push('/partner-new-booking');
+    if (!canOperate) return;
+    devLog('[PARTNER DASHBOARD] navigate new booking', { partnerId });
+    router.push(PROTAXI_ROUTES.partnerNewBooking);
   };
 
   return (
@@ -219,6 +292,14 @@ export default function PartnerDashboardScreen() {
       <StatusBar style="light" />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        <View style={styles.headerRow}>
+          <MaterialCommunityIcons name="domain" size={32} color={gold} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Espace hôtel partenaire</Text>
+            <Text style={styles.headerSubtitle}>Votre établissement et activité PROTAXI</Text>
+          </View>
+        </View>
+
         {showRegisteredBanner ? (
           <View style={styles.successBanner}>
             <Ionicons name="checkmark-circle" size={22} color={green} />
@@ -226,115 +307,199 @@ export default function PartnerDashboardScreen() {
               <Text style={styles.successTitle}>Profil en attente de validation</Text>
               <Text style={styles.successText}>
                 Votre établissement a bien été enregistré. L&apos;équipe PROTAXI valide votre
-                dossier avant activation des réservations partenaire.
+                dossier avant activation des réservations.
               </Text>
             </View>
             <MaterialCommunityIcons name="clock-outline" size={20} color={gold} />
           </View>
         ) : null}
 
-        <View style={styles.header}>
-          <View style={styles.headerTop}>
-            <View style={styles.badge}>
-              <MaterialCommunityIcons name="handshake-outline" size={14} color={green} />
-              <Text style={styles.badgeText}>Espace partenaire V1</Text>
-            </View>
-            <TouchableOpacity onPress={confirmLogout} style={styles.logoutBtn}>
-              <Ionicons name="log-out-outline" size={22} color="#FFF" />
+        {profileLoading ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={gold} />
+            <Text style={styles.loadingText}>Chargement de votre profil…</Text>
+          </View>
+        ) : null}
+
+        {!profileLoading && profileError ? (
+          <View style={styles.errorCard}>
+            <Ionicons name="alert-circle-outline" size={22} color={red} />
+            <Text style={styles.errorText}>{profileError}</Text>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => void loadProfile()}>
+              <Text style={styles.secondaryBtnText}>Réessayer</Text>
             </TouchableOpacity>
           </View>
+        ) : null}
 
-          <Text style={styles.companyName}>{partnerName}</Text>
-          <Text style={styles.subtitle}>
-            {getPartnerTypeLabel(partnerProfile.partnerType)} · {partnerProfile.contactName}
-          </Text>
-          <Text style={styles.meta}>
-            {partnerProfile.phone || 'Téléphone non renseigné'} ·{' '}
-            {partnerProfile.email || 'Email non renseigné'}
-          </Text>
-        </View>
-
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.total}</Text>
-            <Text style={styles.statLabel}>Réservations créées</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.transfers}</Text>
-            <Text style={styles.statLabel}>Transferts</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.excursions}</Text>
-            <Text style={styles.statLabel}>Excursions</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity style={styles.primaryBtn} onPress={openNewReservation}>
-          <Ionicons name="add-circle-outline" size={22} color="#050505" />
-          <Text style={styles.primaryBtnText}>Nouvelle réservation</Text>
-        </TouchableOpacity>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Mes réservations</Text>
-          <Text style={styles.sectionHint}>{PROTAXI_ROUTES.partnerDashboard}</Text>
-        </View>
-
-        {loading ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>Chargement des réservations partenaire...</Text>
-          </View>
-        ) : reservations.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <MaterialCommunityIcons name="calendar-blank-outline" size={34} color={muted} />
-            <Text style={styles.emptyTitle}>Aucune réservation liée</Text>
-            <Text style={styles.emptyText}>
-              Les transferts et excursions créés avec votre compte partenaire apparaîtront ici.
-            </Text>
-          </View>
-        ) : (
-          reservations.map((item) => (
-            <View key={`${item.kind}-${item.id}`} style={styles.reservationCard}>
-              <View style={styles.reservationTop}>
-                <View style={styles.kindPill}>
-                  <Ionicons
-                    name={item.kind === 'transfer' ? 'car-outline' : 'compass-outline'}
-                    size={14}
-                    color={green}
-                  />
-                  <Text style={styles.kindText}>
-                    {item.kind === 'transfer' ? 'Transfert' : 'Excursion'}
+        {!profileLoading && partner ? (
+          <>
+            <View style={styles.heroCard}>
+              <Text style={styles.heroName}>{partner.companyName}</Text>
+              {statusStyle ? (
+                <View style={[styles.statusPill, statusStyle.pill]}>
+                  <Text style={[styles.statusPillText, statusStyle.text]}>
+                    {partner.statusLabel}
                   </Text>
                 </View>
-                <Text style={styles.statusText}>{item.status}</Text>
-              </View>
-              <Text style={styles.reservationTitle}>{item.title}</Text>
-              <Text style={styles.reservationSubtitle}>{item.subtitle}</Text>
-              <View style={styles.reservationFooter}>
-                <Text style={styles.footerMeta}>{item.dateLabel}</Text>
-                <Text style={styles.footerPrice}>{item.priceLabel}</Text>
-              </View>
+              ) : null}
+              {statusHint ? (
+                <Text
+                  style={[
+                    styles.heroHint,
+                    partner.status === 'suspended' && { color: '#FFB4B4' },
+                    partner.status === 'active' && { color: '#B8D4A0' },
+                  ]}
+                >
+                  {statusHint}
+                </Text>
+              ) : null}
             </View>
-          ))
-        )}
+
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Résumé du profil</Text>
+              <DashboardInfoRow
+                icon="person-outline"
+                label="Contact"
+                value={partner.contactName}
+              />
+              <DashboardInfoRow
+                icon="call-outline"
+                label="Téléphone"
+                value={partner.phone || '—'}
+              />
+              <DashboardInfoRow
+                icon="document-text-outline"
+                label="Description"
+                value={formatShortDescription(partner.description)}
+              />
+              {partner.city || partner.address ? (
+                <DashboardInfoRow
+                  icon="location-outline"
+                  label="Localisation"
+                  value={[partner.address, partner.city].filter(Boolean).join(', ') || '—'}
+                />
+              ) : null}
+              {partner.status === 'active' && partner.validatedAt ? (
+                <DashboardInfoRow
+                  icon="shield-checkmark-outline"
+                  label="Validé le"
+                  value={formatPartnerTimestamp(partner.validatedAt)}
+                />
+              ) : null}
+              <DashboardInfoRow
+                icon="time-outline"
+                label="Dernière mise à jour"
+                value={formatPartnerTimestamp(partner.updatedAt)}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              activeOpacity={0.85}
+              onPress={() => router.push(PROTAXI_ROUTES.partnerProfile)}
+            >
+              <Ionicons name="create-outline" size={18} color="#111" />
+              <Text style={styles.primaryBtnText}>Modifier mon profil</Text>
+            </TouchableOpacity>
+
+            <Pressable style={styles.logoutBtn} onPress={() => void logout()}>
+              <Ionicons name="log-out-outline" size={18} color={gold} />
+              <Text style={styles.logoutBtnText}>Déconnexion</Text>
+            </Pressable>
+
+            {!canOperate ? (
+              <View style={styles.lockedCard}>
+                <Ionicons name="lock-closed-outline" size={22} color={gold} />
+                <Text style={styles.lockedTitle}>Réservations non disponibles</Text>
+                <Text style={styles.lockedText}>
+                  La création de réservations partenaire est réservée aux établissements au statut
+                  actif.
+                </Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.statsRow}>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.total}</Text>
+                    <Text style={styles.statLabel}>Réservations</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.transfers}</Text>
+                    <Text style={styles.statLabel}>Transferts</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statValue}>{stats.excursions}</Text>
+                    <Text style={styles.statLabel}>Excursions</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity style={styles.reserveBtn} onPress={openNewReservation}>
+                  <Ionicons name="add-circle-outline" size={22} color="#050505" />
+                  <Text style={styles.reserveBtnText}>Nouvelle réservation</Text>
+                </TouchableOpacity>
+
+                <Text style={styles.reservationsTitle}>Mes réservations</Text>
+
+                {reservationsLoading ? (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyText}>Chargement des réservations…</Text>
+                  </View>
+                ) : reservations.length === 0 ? (
+                  <View style={styles.emptyCard}>
+                    <MaterialCommunityIcons
+                      name="calendar-blank-outline"
+                      size={34}
+                      color={muted}
+                    />
+                    <Text style={styles.emptyTitle}>Aucune réservation</Text>
+                    <Text style={styles.emptyText}>
+                      Créez une réservation transfert ou excursion pour vos clients.
+                    </Text>
+                  </View>
+                ) : (
+                  reservations.map((item) => (
+                    <View key={`${item.kind}-${item.id}`} style={styles.reservationCard}>
+                      <View style={styles.reservationTop}>
+                        <View style={styles.kindPill}>
+                          <Ionicons
+                            name={item.kind === 'transfer' ? 'car-outline' : 'compass-outline'}
+                            size={14}
+                            color={green}
+                          />
+                          <Text style={styles.kindText}>
+                            {item.kind === 'transfer' ? 'Transfert' : 'Excursion'}
+                          </Text>
+                        </View>
+                        <Text style={styles.reservationStatus}>{item.status}</Text>
+                      </View>
+                      <Text style={styles.reservationTitle}>{item.title}</Text>
+                      <Text style={styles.reservationSubtitle}>{item.subtitle}</Text>
+                      <View style={styles.reservationFooter}>
+                        <Text style={styles.footerMeta}>{item.dateLabel}</Text>
+                        <Text style={styles.footerPrice}>{item.priceLabel}</Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </>
+            )}
+          </>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: bg,
-  },
-  scroll: {
-    padding: 20,
-    paddingBottom: 40,
-  },
+  container: { flex: 1, backgroundColor: bg },
+  scroll: { padding: 20, paddingBottom: 40, gap: 14 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerTitle: { color: '#FFF', fontSize: 22, fontWeight: '900' },
+  headerSubtitle: { color: muted, fontSize: 13, marginTop: 4 },
   successBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
-    marginBottom: 16,
     padding: 14,
     borderRadius: 14,
     backgroundColor: 'rgba(139,197,63,0.1)',
@@ -343,63 +508,134 @@ const styles = StyleSheet.create({
   },
   successTitle: { color: '#FFF', fontSize: 14, fontWeight: '900', marginBottom: 4 },
   successText: { color: '#B8D4A0', fontSize: 12, lineHeight: 17 },
-  header: {
-    marginBottom: 20,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  loadingWrap: { alignItems: 'center', gap: 12, paddingVertical: 40 },
+  loadingText: { color: muted, fontSize: 14, fontWeight: '600' },
+  errorCard: {
+    backgroundColor: 'rgba(255,90,90,0.08)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,90,90,0.35)',
+    padding: 16,
+    gap: 12,
     alignItems: 'center',
-    marginBottom: 14,
   },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(139,197,63,0.12)',
+  errorText: { color: '#FFB4B4', fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  heroCard: {
+    backgroundColor: card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.25)',
+    padding: 18,
+    gap: 10,
+  },
+  heroName: { color: '#FFF', fontSize: 24, fontWeight: '900' },
+  statusPill: {
+    alignSelf: 'flex-start',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 6,
+  },
+  statusPillText: { fontSize: 12, fontWeight: '900' },
+  statusActive: {
+    backgroundColor: 'rgba(139,197,63,0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.25)',
+    borderColor: 'rgba(139,197,63,0.4)',
   },
-  badgeText: {
-    color: green,
-    fontSize: 12,
-    fontWeight: '700',
+  statusTextActive: { color: green },
+  statusPending: {
+    backgroundColor: 'rgba(212,160,23,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.4)',
   },
-  logoutBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+  statusTextPending: { color: gold },
+  statusSuspended: {
+    backgroundColor: 'rgba(255,90,90,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,90,90,0.35)',
+  },
+  statusTextSuspended: { color: red },
+  statusDraft: {
+    backgroundColor: 'rgba(138,138,138,0.12)',
     borderWidth: 1,
     borderColor: border,
+  },
+  statusTextMuted: { color: muted },
+  heroHint: { color: muted, fontSize: 13, lineHeight: 18 },
+  sectionCard: {
+    backgroundColor: card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: border,
+    padding: 16,
+    gap: 4,
+  },
+  sectionTitle: {
+    color: '#FFF',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 8,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1A1A1A',
+  },
+  infoLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  infoLabel: { color: muted, fontSize: 13, fontWeight: '700' },
+  infoValue: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1.2,
+    textAlign: 'right',
+  },
+  primaryBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: card,
+    gap: 8,
+    backgroundColor: green,
+    borderRadius: 14,
+    paddingVertical: 14,
   },
-  companyName: {
-    color: '#FFF',
-    fontSize: 28,
-    fontWeight: '900',
-  },
-  subtitle: {
-    color: green,
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 6,
-  },
-  meta: {
-    color: muted,
-    fontSize: 13,
-    marginTop: 8,
-    lineHeight: 18,
-  },
-  statsRow: {
+  primaryBtnText: { color: '#111', fontSize: 15, fontWeight: '900' },
+  logoutBtn: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.35)',
+    backgroundColor: 'rgba(212,160,23,0.06)',
+    paddingVertical: 12,
   },
+  logoutBtnText: { color: gold, fontSize: 14, fontWeight: '800' },
+  secondaryBtn: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: border,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  secondaryBtnText: { color: '#FFF', fontWeight: '700' },
+  lockedCard: {
+    backgroundColor: 'rgba(212,160,23,0.08)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.3)',
+    padding: 18,
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 4,
+  },
+  lockedTitle: { color: '#FFF', fontSize: 16, fontWeight: '900' },
+  lockedText: { color: muted, fontSize: 13, textAlign: 'center', lineHeight: 18 },
+  statsRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
   statCard: {
     flex: 1,
     backgroundColor: card,
@@ -408,45 +644,24 @@ const styles = StyleSheet.create({
     borderColor: border,
     padding: 14,
   },
-  statValue: {
-    color: '#FFF',
-    fontSize: 24,
-    fontWeight: '900',
-  },
-  statLabel: {
-    color: muted,
-    fontSize: 11,
-    marginTop: 6,
-    fontWeight: '600',
-  },
-  primaryBtn: {
+  statValue: { color: '#FFF', fontSize: 24, fontWeight: '900' },
+  statLabel: { color: muted, fontSize: 11, marginTop: 6, fontWeight: '600' },
+  reserveBtn: {
     backgroundColor: green,
     borderRadius: 16,
     paddingVertical: 16,
-    paddingHorizontal: 18,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginBottom: 24,
   },
-  primaryBtnText: {
-    color: '#050505',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  sectionHeader: {
-    marginBottom: 12,
-  },
-  sectionTitle: {
+  reserveBtnText: { color: '#050505', fontSize: 16, fontWeight: '800' },
+  reservationsTitle: {
     color: '#FFF',
     fontSize: 18,
     fontWeight: '800',
-  },
-  sectionHint: {
-    color: muted,
-    fontSize: 12,
-    marginTop: 4,
+    marginTop: 8,
+    marginBottom: 4,
   },
   emptyCard: {
     backgroundColor: card,
@@ -457,17 +672,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  emptyTitle: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  emptyText: {
-    color: muted,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
-  },
+  emptyTitle: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  emptyText: { color: muted, fontSize: 13, textAlign: 'center', lineHeight: 19 },
   reservationCard: {
     backgroundColor: card,
     borderRadius: 18,
@@ -491,41 +697,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  kindText: {
-    color: green,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  statusText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  reservationTitle: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  reservationSubtitle: {
-    color: muted,
-    fontSize: 13,
-    marginTop: 6,
-    lineHeight: 18,
-  },
+  kindText: { color: green, fontSize: 12, fontWeight: '700' },
+  reservationStatus: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  reservationTitle: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  reservationSubtitle: { color: muted, fontSize: 13, marginTop: 6, lineHeight: 18 },
   reservationFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 12,
   },
-  footerMeta: {
-    color: muted,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  footerPrice: {
-    color: green,
-    fontSize: 13,
-    fontWeight: '800',
-  },
+  footerMeta: { color: muted, fontSize: 12, fontWeight: '600' },
+  footerPrice: { color: green, fontSize: 13, fontWeight: '800' },
 });
