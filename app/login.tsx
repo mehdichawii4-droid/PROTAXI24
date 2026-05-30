@@ -19,8 +19,10 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { useAuthRedirect } from '@/hooks/useAuthRedirect';
 import { BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD } from '@/firebase';
+import { PROTAXI_ROUTES } from '@/utils/navigation';
 
 const gold = '#FFD700';
+const green = '#8BC53F';
 const bg = '#050505';
 const card = '#101010';
 const border = '#262626';
@@ -224,6 +226,14 @@ export default function LoginScreen() {
               <Ionicons name="person-add-outline" size={18} color={gold} />
               <Text style={styles.registerLinkText}>Créer un compte</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.guideLinkBtn}
+              onPress={() => router.push(PROTAXI_ROUTES.guideRegister)}
+            >
+              <MaterialCommunityIcons name="account-tie-outline" size={18} color={green} />
+              <Text style={styles.guideLinkText}>Devenir guide PROTAXI</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.bootstrapCard}>
@@ -403,6 +413,23 @@ const styles = StyleSheet.create({
   },
   registerLinkText: {
     color: gold,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  guideLinkBtn: {
+    marginTop: 10,
+    height: 52,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.35)',
+    backgroundColor: 'rgba(139,197,63,0.08)',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  guideLinkText: {
+    color: green,
     fontSize: 14,
     fontWeight: '900',
   },

@@ -12,10 +12,12 @@ export const ROLE_HOME_ROUTES: Record<UserRole, string> = {
   guide: '/guide-dashboard',
 };
 
+/** Routes accessibles au rôle guide (hors routes publiques déjà dans PUBLIC_ROUTES). */
+export const GUIDE_PROTECTED_ROUTES = new Set(['guide-dashboard', 'guide-profile']);
+
 export const GUIDE_ROUTES = new Set([
-  'guide-dashboard',
-  'guide-profile',
   'guide-register',
+  ...GUIDE_PROTECTED_ROUTES,
 ]);
 
 export const CLIENT_BLOCKED_ROUTES = new Set([
@@ -96,7 +98,7 @@ export const canAccessRoute = (
   }
 
   if (role === 'guide') {
-    return GUIDE_ROUTES.has(routeKey);
+    return GUIDE_PROTECTED_ROUTES.has(routeKey) || routeKey === 'guide-register';
   }
 
   return false;
