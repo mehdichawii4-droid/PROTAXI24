@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { router, Stack } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -88,6 +88,11 @@ const STEP_COPY: Record<FlowStep, { title: string; hint: string }> = {
   4: { title: 'Personnalisez votre expérience', hint: 'Options selon le circuit choisi' },
   5: { title: 'Confirmez votre demande', hint: 'Vérifiez avant envoi' },
 };
+
+function normalizeParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
 
 function formatTourDateTime(date: Date) {
   const day = date.getDate();
@@ -347,6 +352,16 @@ export default function ExperiencesPrivateScreen() {
     }
   }
 
+  const params = useLocalSearchParams<{
+    experienceId?: string;
+    source?: string;
+    preselectOption?: string;
+  }>();
+  const deepLinkExperienceId = normalizeParam(params.experienceId);
+  const deepLinkSource = normalizeParam(params.source);
+  const deepLinkPreselectOption = normalizeParam(params.preselectOption) as ExperienceOptionId;
+  const deepLinkApplied = useRef(false);
+
   const [step, setStep] = useState<FlowStep>(1);
   const [formulaConfirmed, setFormulaConfirmed] = useState(false);
   const [experienceId, setExperienceId] = useState<string | null>(null);
@@ -361,6 +376,29 @@ export default function ExperiencesPrivateScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const experience = experienceId ? getExperienceV1(experienceId) : undefined;
+
+  useEffect(() => {
+    if (deepLinkApplied.current || !deepLinkExperienceId) return;
+
+    const linkedExperience = getExperienceV1(deepLinkExperienceId);
+    if (!linkedExperience) return;
+
+    deepLinkApplied.current = true;
+    setFormulaConfirmed(true);
+    setExperienceId(deepLinkExperienceId);
+    setStep(2);
+
+    if (
+      deepLinkPreselectOption &&
+      linkedExperience.availableOptions.includes(deepLinkPreselectOption)
+    ) {
+      setSelectedOptions({ [deepLinkPreselectOption]: true });
+    }
+
+    if (deepLinkSource && __DEV__) {
+      console.log(`[experiences-private] deep link source: ${deepLinkSource}`);
+    }
+  }, [deepLinkExperienceId, deepLinkPreselectOption, deepLinkSource]);
 
   const whenLabel = scheduledAt
     ? formatScheduleSummary(scheduledAt)

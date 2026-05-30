@@ -1,6 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, type Href } from 'expo-router';
+import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import {
@@ -40,21 +40,12 @@ import {
   getDiscoverRecommendations,
   getDiscoverTrendsHighlight,
 } from '@/services/discoverCatalogService';
-import { logNavigation, PROTAXI_ROUTES } from '@/utils/navigation';
-
-function pushRoute(
-  pathname: Href,
-  params: Record<string, string>,
-  label: string,
-) {
-  const routePath = typeof pathname === 'string' ? pathname : String(pathname);
-  const paramSummary = Object.entries(params)
-    .map(([key, value]) => `${key}=${value}`)
-    .join('&');
-  const routeLabel = paramSummary ? `${routePath}?${paramSummary}` : routePath;
-  logNavigation(routeLabel, { source: DISCOVER_NAV_SOURCE, label });
-  router.push({ pathname, params } as Href);
-}
+import {
+  navigateToExperiencesPrivate,
+  navigateToHotelFromDiscover,
+  navigateTo,
+  PROTAXI_ROUTES,
+} from '@/utils/navigation';
 
 function FadeSlideIn({
   children,
@@ -102,6 +93,9 @@ export default function DiscoverGuelmaScreen() {
   const guideTeaser = useMemo(() => getDiscoverGuideTeaser(), []);
   const photographerTeaser = useMemo(() => getDiscoverPhotographerTeaser(), []);
 
+  const discoverSource = (suffix?: string) =>
+    suffix ? `${DISCOVER_NAV_SOURCE}-${suffix}` : DISCOVER_NAV_SOURCE;
+
   const openExperiencesPrivate = (
     label: string,
     options?: {
@@ -110,22 +104,21 @@ export default function DiscoverGuelmaScreen() {
       preselectOption?: ExperienceOptionId;
     },
   ) => {
-    const params: Record<string, string> = {
-      source: options?.sourceSuffix
-        ? `${DISCOVER_NAV_SOURCE}-${options.sourceSuffix}`
-        : DISCOVER_NAV_SOURCE,
-    };
-    if (options?.experienceId) {
-      params.experienceId = options.experienceId;
-    }
-    if (options?.preselectOption) {
-      params.preselectOption = options.preselectOption;
-    }
-    pushRoute(PROTAXI_ROUTES.experiencesPrivate, params, label);
+    navigateToExperiencesPrivate(
+      { source: DISCOVER_NAV_SOURCE, label },
+      {
+        experienceId: options?.experienceId,
+        source: discoverSource(options?.sourceSuffix),
+        preselectOption: options?.preselectOption,
+      },
+    );
   };
 
   const bookCityTaxi = () => {
-    pushRoute(PROTAXI_ROUTES.city, { source: DISCOVER_NAV_SOURCE }, 'Besoin d\'un taxi en ville ?');
+    navigateTo(
+      { pathname: PROTAXI_ROUTES.city, params: { source: DISCOVER_NAV_SOURCE } },
+      { source: DISCOVER_NAV_SOURCE, label: 'Besoin d\'un taxi en ville ?' },
+    );
   };
 
   return (
@@ -216,10 +209,9 @@ export default function DiscoverGuelmaScreen() {
           <DiscoverHotelTeasers
             items={hotelTeasers}
             onPressTeaser={() =>
-              pushRoute(
-                PROTAXI_ROUTES.hotel,
-                { source: DISCOVER_NAV_SOURCE },
-                'Transfert hôtel premium',
+              navigateToHotelFromDiscover(
+                { source: DISCOVER_NAV_SOURCE, label: 'Transfert hôtel premium' },
+                DISCOVER_NAV_SOURCE,
               )
             }
           />

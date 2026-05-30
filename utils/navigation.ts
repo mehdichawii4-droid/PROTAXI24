@@ -1,5 +1,7 @@
 import { router, type Href } from 'expo-router';
 
+import type { DiscoverExperienceNavigationParams } from '@/types/discover';
+
 export const PROTAXI_ROUTES = {
   home: '/',
   city: '/city',
@@ -56,4 +58,53 @@ export function navigateTo(route: Href | string, context: ProtaxiNavigationConte
 export function navigateReplace(route: Href | string, context: ProtaxiNavigationContext) {
   logNavigation(route, context);
   router.replace(route as Href);
+}
+
+export type ExperiencesPrivateNavigationParams = DiscoverExperienceNavigationParams;
+
+export function buildExperiencesPrivateRoute(
+  params?: ExperiencesPrivateNavigationParams,
+): { pathname: typeof PROTAXI_ROUTES.experiencesPrivate; params: Record<string, string> } {
+  const routeParams: Record<string, string> = {};
+  if (params?.experienceId) {
+    routeParams.experienceId = params.experienceId;
+  }
+  if (params?.source) {
+    routeParams.source = params.source;
+  }
+  if (params?.preselectOption) {
+    routeParams.preselectOption = params.preselectOption;
+  }
+  return {
+    pathname: PROTAXI_ROUTES.experiencesPrivate,
+    params: routeParams,
+  };
+}
+
+export function navigateToExperiencesPrivate(
+  context: ProtaxiNavigationContext,
+  params?: ExperiencesPrivateNavigationParams,
+) {
+  const route = buildExperiencesPrivateRoute(params);
+  const query = Object.entries(route.params)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+  const routeLabel = query
+    ? `${route.pathname}?${query}`
+    : route.pathname;
+  logNavigation(routeLabel, context);
+  router.push(route as Href);
+}
+
+export function navigateToHotelFromDiscover(
+  context: ProtaxiNavigationContext,
+  source: string,
+) {
+  navigateTo(
+    {
+      pathname: PROTAXI_ROUTES.hotel,
+      params: { source },
+    } as Href,
+    context,
+  );
 }
