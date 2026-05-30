@@ -64,6 +64,18 @@ export function getGuideDocRef(guideId: string): DocumentReference {
   return doc(getFirestoreDb(), 'guides', normalizedGuideId);
 }
 
+export function getPartnersCollectionRef(): CollectionReference {
+  return getCollectionRef('partners');
+}
+
+export function getPartnerDocRef(partnerId: string): DocumentReference {
+  const normalizedPartnerId = partnerId.trim();
+  if (!normalizedPartnerId) {
+    throw new Error('partnerId is required to access a partners document.');
+  }
+  return doc(getFirestoreDb(), 'partners', normalizedPartnerId);
+}
+
 export function getTourBookingsCollectionRef(): CollectionReference {
   return getCollectionRef('tourBookings');
 }
