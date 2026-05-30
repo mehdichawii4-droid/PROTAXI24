@@ -65,6 +65,35 @@ export interface TourBookingGuideFields {
 }
 
 // ---------------------------------------------------------------------------
+// Partenaires PROTAXI — partners/{uid} (partnerId === auth.uid)
+// ---------------------------------------------------------------------------
+
+export type PartnerStatus = 'draft' | 'pending_review' | 'active' | 'suspended';
+
+export type PartnerType = 'hotel' | 'agency' | 'transport';
+
+export interface Partner {
+  uid: string;
+  companyName: string;
+  partnerType: PartnerType;
+  contactName: string;
+  phone: string;
+  email: string;
+  isActive: boolean;
+  status: PartnerStatus;
+  address?: string;
+  city?: string;
+  postalCode?: string;
+  receptionPhone?: string;
+  website?: string;
+  validatedAt?: Timestamp | Date | null;
+  validatedBy?: string;
+  internalNotes?: string;
+  createdAt: Timestamp | Date;
+  updatedAt: Timestamp | Date;
+}
+
+// ---------------------------------------------------------------------------
 // Profils utilisateurs (auth / rôles app)
 // ---------------------------------------------------------------------------
 
