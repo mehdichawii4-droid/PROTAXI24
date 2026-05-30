@@ -7,8 +7,14 @@ import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import AssignedGuideClientCard from '@/components/AssignedGuideClientCard';
 import { getBookingModeLabel } from '@/constants/experiencesPrivateCatalog';
 import { getTourBookingDocRef } from '@/firebase/firestore';
+import {
+  parseClientAssignedGuide,
+  shouldShowClientAssignedGuide,
+  type ClientAssignedGuideDisplay,
+} from '@/services/clientAssignedGuide';
 import { devError } from '@/utils/devLog';
 import { PROTAXI_ROUTES } from '@/utils/navigation';
 
@@ -69,6 +75,7 @@ export default function ExperienceConfirmedScreen() {
   const price = getParamString(params.price) || 'Sur confirmation';
 
   const [liveStatus, setLiveStatus] = useState<LiveBookingStatus>('pending');
+  const [assignedGuide, setAssignedGuide] = useState<ClientAssignedGuideDisplay | null>(null);
 
   useEffect(() => {
     if (!tourBookingId) return;
@@ -78,10 +85,21 @@ export default function ExperienceConfirmedScreen() {
       bookingRef,
       (snapshot) => {
         if (!snapshot.exists()) return;
-        setLiveStatus(normalizeLiveStatus(snapshot.data().status));
+        const data = snapshot.data() as Record<string, unknown>;
+        setLiveStatus(normalizeLiveStatus(data.status));
+        const bookingRow = {
+          source: String(data.source || 'experiences-private'),
+          status: normalizeLiveStatus(data.status),
+          ...data,
+        };
+        setAssignedGuide(
+          shouldShowClientAssignedGuide(bookingRow)
+            ? parseClientAssignedGuide(bookingRow)
+            : null,
+        );
       },
       (error) => {
-        devError('[SNAPSHOT DENIED - experience-confirmed - tourBooking status]', error);
+        devError('[SNAPSHOT DENIED - experience-confirmed - tourBooking]', error);
       },
     );
 
@@ -122,6 +140,8 @@ export default function ExperienceConfirmedScreen() {
               </Text>
             </View>
           </View>
+
+          {assignedGuide ? <AssignedGuideClientCard guide={assignedGuide} variant="full" /> : null}
 
           <LinearGradient
             colors={['rgba(28,28,28,0.95)', 'rgba(12,12,12,0.98)']}

@@ -33,6 +33,10 @@ export type TourBookingRecord = {
   status?: string;
   source?: string;
   createdAt?: unknown;
+  assignedGuideId?: string;
+  assignedGuideName?: string;
+  assignedGuidePhone?: string;
+  assignedGuideSpecialtiesSummary?: string;
 };
 
 export function normalizeTourBookingRecord(
@@ -65,6 +69,12 @@ export function normalizeTourBookingRecord(
     status: String(raw.status || 'pending'),
     source: String(raw.source || 'discover-guelma'),
     createdAt: raw.createdAt,
+    assignedGuideId: raw.assignedGuideId ? String(raw.assignedGuideId) : undefined,
+    assignedGuideName: raw.assignedGuideName ? String(raw.assignedGuideName) : undefined,
+    assignedGuidePhone: raw.assignedGuidePhone ? String(raw.assignedGuidePhone) : undefined,
+    assignedGuideSpecialtiesSummary: raw.assignedGuideSpecialtiesSummary
+      ? String(raw.assignedGuideSpecialtiesSummary)
+      : undefined,
   };
 }
 

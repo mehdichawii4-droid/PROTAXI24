@@ -57,6 +57,9 @@ export interface TourBookingGuideFields {
   guideRequested?: boolean;
   assignedGuideId?: string | null;
   assignedGuideName?: string | null;
+  /** Snapshot client (assignation admin — stratégie C). */
+  assignedGuidePhone?: string | null;
+  assignedGuideSpecialtiesSummary?: string | null;
   guideAssignedAt?: Timestamp | Date | null;
   guideAssignedBy?: string | null;
 }

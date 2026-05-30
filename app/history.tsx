@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AssignedGuideClientCard from '@/components/AssignedGuideClientCard';
 import { getCollectionRef, getTourBookingsCollectionRef } from '@/firebase/firestore';
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
@@ -27,6 +28,10 @@ import {
   normalizeTourBookingRecord,
   type TourBookingRecord,
 } from '@/services/tourBookingHistory';
+import {
+  parseClientAssignedGuide,
+  shouldShowClientAssignedGuide,
+} from '@/services/clientAssignedGuide';
 import {
   formatRidePaymentAmount,
   getRidePaymentStatusConfig,
@@ -480,6 +485,9 @@ function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
   const hasOptions =
     Boolean(booking.options?.trim()) &&
     booking.options !== 'Aucune option supplémentaire';
+  const assignedGuide = shouldShowClientAssignedGuide(booking)
+    ? parseClientAssignedGuide(booking)
+    : null;
 
   return (
     <View style={[styles.tourismCard, isGroup && styles.tourismCardGroup]}>
@@ -534,6 +542,10 @@ function TourExperienceCard({ booking }: { booking: TourBookingRecord }) {
 
       {isGroup && checkInLabel ? (
         <TourInfoRow icon="qr-code-outline" label="Check-in" value={checkInLabel} />
+      ) : null}
+
+      {assignedGuide ? (
+        <AssignedGuideClientCard guide={assignedGuide} variant="compact" />
       ) : null}
 
       <View style={styles.tourismCardBottom}>

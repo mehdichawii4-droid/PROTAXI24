@@ -20,6 +20,7 @@ import {
   guideFormInputFromGuide,
   mapGuideToAdminDetail,
   mapGuideToAdminListItem,
+  formatGuideSpecialtiesSummary,
   mapGuideToAssignableOption,
   normalizeGuideProfile,
   validateBookingForGuideAssign,
@@ -408,6 +409,8 @@ export async function assignGuideToTourBooking(
     await updateDoc(getTourBookingDocRef(normalizedBookingId), {
       assignedGuideId: guide.uid,
       assignedGuideName: guide.displayName,
+      assignedGuidePhone: guide.phone,
+      assignedGuideSpecialtiesSummary: formatGuideSpecialtiesSummary(guide.specialties),
       guideAssignedAt: serverTimestamp(),
       guideAssignedBy: normalizedAdminUid,
     });
@@ -443,6 +446,8 @@ export async function clearGuideAssignment(bookingId: string): Promise<void> {
     await updateDoc(getTourBookingDocRef(normalizedBookingId), {
       assignedGuideId: null,
       assignedGuideName: null,
+      assignedGuidePhone: null,
+      assignedGuideSpecialtiesSummary: null,
       guideAssignedAt: null,
       guideAssignedBy: null,
     });
