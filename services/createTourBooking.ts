@@ -69,6 +69,18 @@ export class CreateTourBookingError extends Error {
   }
 }
 
+export class CreateTourBookingGroupMatchError extends CreateTourBookingError {
+  code: 'GROUP_MATCH_FAILED';
+  bookingId: string;
+
+  constructor(message: string, bookingId: string) {
+    super(message);
+    this.name = 'CreateTourBookingGroupMatchError';
+    this.code = 'GROUP_MATCH_FAILED';
+    this.bookingId = bookingId;
+  }
+}
+
 export async function createTourBooking(
   input: CreateTourBookingInput,
 ): Promise<CreateTourBookingResult> {
@@ -200,6 +212,13 @@ export async function createTourBooking(
             (groupError as { code?: string }).code,
           );
         }
+
+        throw new CreateTourBookingGroupMatchError(
+          groupError instanceof Error
+            ? groupError.message
+            : 'Impossible de rejoindre un départ groupe.',
+          bookingDoc.id,
+        );
       }
     }
 

@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -7,6 +6,10 @@ import { addDoc, collection } from 'firebase/firestore';
 import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '../firebaseConfig';
+import {
+  resolveConfirmationContact,
+  resolveConfirmationLocations,
+} from '@/services/confirmationRidePayload';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
 import { buildRidePaymentCreateFields } from '@/services/ridePayment';
 
@@ -43,6 +46,9 @@ export default function ConfirmationScreen() {
   const partnerFields = pickPartnerFieldsFromParams(
     params as Record<string, string | string[] | undefined>,
   );
+  const { departure, destination } = resolveConfirmationLocations(
+    params as Record<string, string | string[] | undefined>,
+  );
 
   const numericPrice = Number(price || 0);
 
@@ -65,35 +71,12 @@ export default function ConfirmationScreen() {
     return;
   }
 
-  const clientName = profile?.fullName?.trim() || 'Client PROTAXI';
-  const clientPhone = profile?.phone?.trim() || 'Non renseigné';
+  const { clientName, clientPhone } = resolveConfirmationContact(
+    params as Record<string, string | string[] | undefined>,
+    profile,
+  );
 
   try {
-    const newReservation = {
-      id: Date.now().toString(),
-      service: String(service || 'Transfert aéroport'),
-      mode: String(mode || ''),
-      airport: String(airport || ''),
-      address: String(address || ''),
-      date: String(date || ''),
-      time: String(time || ''),
-      passengers: String(passengers || '1'),
-      bags: String(bags || '0'),
-      tripType: isRoundTrip ? 'aller-retour' : 'aller-simple',
-      price: String(finalPrice || '0'),
-      status: 'En attente',
-      createdAt: new Date().toISOString(),
-    };
-
-    const oldData = await AsyncStorage.getItem('reservations');
-    const oldReservations = oldData ? JSON.parse(oldData) : [];
-    const updatedReservations = [newReservation, ...oldReservations];
-
-    await AsyncStorage.setItem(
-      'reservations',
-      JSON.stringify(updatedReservations)
-    );
-
     const priceLabel = `${finalPrice} DA`;
 
     const rideDoc = await addDoc(collection(db, 'rides'), {
@@ -102,10 +85,10 @@ export default function ConfirmationScreen() {
       client: clientName,
       phone: clientPhone,
       service: String(service || 'Transfert aéroport'),
-      departure: String(address || 'À confirmer'),
-      destination: String(airport || 'À confirmer'),
-      airport: String(airport || ''),
-      address: String(address || ''),
+      departure,
+      destination,
+      airport: destination,
+      address: departure,
       date: String(date || ''),
       price: priceLabel,
       time: String(time || '—'),
@@ -137,8 +120,10 @@ export default function ConfirmationScreen() {
               params: {
                 id: rideDoc.id,
                 rideId: rideDoc.id,
-                address: String(address || ''),
-                airport: String(airport || ''),
+                address: departure,
+                airport: destination,
+                departure,
+                destination,
                 time: String(time || ''),
                 price: String(finalPrice || '0'),
                 status: 'En attente',
@@ -173,8 +158,8 @@ Type : ${
           ? 'Déposer à l’aéroport'
           : 'Récupérer à l’aéroport'
       }
-Adresse : ${String(address || 'Non renseignée')}
-Aéroport : ${String(airport || 'Non renseigné')}
+Adresse : ${departure || 'Non renseignée'}
+Destination : ${destination || 'Non renseignée'}
 Date : ${String(date || 'Non renseignée')}
 Heure : ${String(time || 'Non renseignée')}
 Passagers : ${String(passengers || '1')}
@@ -238,13 +223,13 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
           <InfoRow
             icon="location-outline"
             label="Adresse"
-            value={String(address || 'Non renseignée')}
+            value={departure || 'Non renseignée'}
           />
 
           <InfoRow
             icon="airplane-outline"
             label="Aéroport"
-            value={String(airport || 'Non renseigné')}
+            value={destination || 'Non renseigné'}
           />
 
           <InfoRow

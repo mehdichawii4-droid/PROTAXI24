@@ -18,7 +18,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getFirebaseAuth } from '@/firebase/authInstance';
-import { createTourBooking } from '@/services/createTourBooking';
+import {
+  createTourBooking,
+  CreateTourBookingGroupMatchError,
+} from '@/services/createTourBooking';
 import { logNavigation, PROTAXI_ROUTES } from '@/utils/navigation';
 import { devError, devLog } from '@/utils/devLog';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
@@ -513,6 +516,14 @@ export default function TourBookingScreen() {
       devError('CONFIRM EXPERIENCE ERROR FULL:', error);
       devError('Tour booking Firestore error:', error);
       devLog(error);
+
+      if (error instanceof CreateTourBookingGroupMatchError) {
+        Alert.alert(
+          'Départ groupe indisponible',
+          'Votre demande n’a pas pu être associée à un départ groupe. Réessayez ou contactez PROTAXI.',
+        );
+        return;
+      }
 
       if (error instanceof Error) {
         devLog('Tour booking error message:', error.message);

@@ -48,6 +48,8 @@ export default function HotelSummaryScreen() {
         price: String(data.price || '0')
   .replace(' DA', '')
   .replace(/\s/g, ''),
+        fullName: String(data.fullName || 'Client PROTAXI'),
+        phone: String(data.phone || 'Non renseigné'),
         ...partnerFields,
       },
     });

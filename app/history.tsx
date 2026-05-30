@@ -1,5 +1,4 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { onSnapshot, orderBy, query, where } from 'firebase/firestore';
@@ -96,13 +95,6 @@ function filterTaxiHistoryItems(items: TaxiHistoryItem[]) {
   return items.filter((item) => TAXI_HISTORY_STATUSES.has(String(item.status || '')));
 }
 
-async function loadAsyncStorageTaxiHistory(): Promise<TaxiHistoryItem[]> {
-  const data = await AsyncStorage.getItem('reservations');
-  const reservations = data ? JSON.parse(data) : [];
-
-  return filterTaxiHistoryItems(reservations as TaxiHistoryItem[]).reverse();
-}
-
 function getTourBookingCreatedAtMs(value: unknown) {
   if (!value) return 0;
 
@@ -132,14 +124,9 @@ function sortTourBookingsNewestFirst(bookings: TourBookingRecord[]) {
 export default function HistoryScreen() {
   const { user } = useAuth();
   const [firestoreTaxiHistory, setFirestoreTaxiHistory] = useState<TaxiHistoryItem[]>([]);
-  const [asyncStorageTaxiHistory, setAsyncStorageTaxiHistory] = useState<TaxiHistoryItem[]>([]);
-  const [useAsyncStorageFallback, setUseAsyncStorageFallback] = useState(false);
   const [tourBookings, setTourBookings] = useState<TourBookingRecord[]>([]);
 
-  const history = useMemo(
-    () => (useAsyncStorageFallback ? asyncStorageTaxiHistory : firestoreTaxiHistory),
-    [useAsyncStorageFallback, asyncStorageTaxiHistory, firestoreTaxiHistory],
-  );
+  const history = firestoreTaxiHistory;
 
   useFocusEffect(
     useCallback(() => {
@@ -147,22 +134,9 @@ export default function HistoryScreen() {
 
       if (!clientUid) {
         setFirestoreTaxiHistory([]);
-        setAsyncStorageTaxiHistory([]);
-        setUseAsyncStorageFallback(false);
         setTourBookings([]);
         return undefined;
       }
-
-      const applyAsyncStorageFallback = () => {
-        void loadAsyncStorageTaxiHistory()
-          .then((items) => {
-            setAsyncStorageTaxiHistory(items);
-          })
-          .catch((error) => {
-            devError('[PROMISE DENIED - history - loadHistory]', error);
-            setAsyncStorageTaxiHistory([]);
-          });
-      };
 
       const ridesQuery = query(
         getCollectionRef('rides'),
@@ -173,14 +147,6 @@ export default function HistoryScreen() {
       const unsubscribeRides = onSnapshot(
         ridesQuery,
         (snapshot) => {
-          if (snapshot.empty) {
-            setUseAsyncStorageFallback(true);
-            setFirestoreTaxiHistory([]);
-            applyAsyncStorageFallback();
-            return;
-          }
-
-          setUseAsyncStorageFallback(false);
           setFirestoreTaxiHistory(
             filterTaxiHistoryItems(
               snapshot.docs.map((docSnap) =>
@@ -194,9 +160,7 @@ export default function HistoryScreen() {
         },
         (error) => {
           devError('[SNAPSHOT DENIED - history - taxi rides]', error);
-          setUseAsyncStorageFallback(true);
           setFirestoreTaxiHistory([]);
-          applyAsyncStorageFallback();
         },
       );
 

@@ -42,6 +42,8 @@ export default function PriseEnChargeSummaryScreen() {
             ? 'retour'
             : 'simple',
         price: priceClean,
+        fullName: String(data.fullName || 'Client PROTAXI'),
+        phone: String(data.phone || 'Non renseigné'),
       },
     });
   };

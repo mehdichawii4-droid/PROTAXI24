@@ -63,6 +63,11 @@ const CHECKS = [
     command: 'node',
     args: ['scripts/validate-experiences-v1.mjs'],
   },
+  {
+    label: 'stab1-confirmation',
+    command: 'npx',
+    args: ['tsx', 'scripts/verify-stab1-confirmation.mjs'],
+  },
 ];
 
 console.log('=== PROTAXI24 V1 Closure QA (automated) ===\n');

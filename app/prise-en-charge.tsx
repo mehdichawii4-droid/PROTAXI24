@@ -194,6 +194,8 @@ export default function PriseEnChargeScreen() {
     ? 'Aller simple'
     : 'Aller-retour',
         price: String(formattedPrice).replace(' DA', '').replace(/\s/g, ''),
+        fullName: fullName || 'Client PROTAXI',
+        phone: phone || 'Non renseigné',
         ...(incomingCircuitName ? { circuitName: incomingCircuitName } : {}),
         ...(incomingFormula ? { formula: incomingFormula } : {}),
         ...(incomingSteps ? { steps: incomingSteps } : {}),

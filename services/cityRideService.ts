@@ -84,6 +84,11 @@ export async function submitCityRide(
   const priceClean = cleanCityRidePrice(input.price);
 
   if (rideMode === 'Réserver plus tard') {
+    const clientUid = context.clientUid?.trim();
+    if (!clientUid) {
+      return { status: 'auth_required' };
+    }
+
     router.push({
       pathname: '/confirmation',
       params: {
@@ -93,7 +98,20 @@ export async function submitCityRide(
         date: input.date || 'À confirmer',
         time: input.time || 'À confirmer',
         price: priceClean,
+        rideMode: 'Réserver plus tard',
+        passengers: String(input.passengers || '1'),
+        bags: String(input.bags || '0'),
+        fullName:
+          String(input.fullName || '').trim() ||
+          String(context.profileFullName || '').trim() ||
+          'Client PROTAXI',
+        phone: String(input.phone || context.profilePhone || 'Non renseigné'),
+        notes: String(input.notes || ''),
         message: 'Votre course a été programmée avec succès.',
+        ...pickPartnerFieldsFromParams({
+          partnerId: input.partnerId,
+          partnerName: input.partnerName,
+        }),
       },
     });
     return { status: 'scheduled' };
