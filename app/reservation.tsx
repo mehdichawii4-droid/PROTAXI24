@@ -28,8 +28,6 @@ import { devError } from '@/utils/devLog';
 import { canClientRateDriverFromRide } from '@/services/rideRating';
 import {
   formatRidePaymentAmount,
-  getRidePaymentStatusConfig,
-  getRidePaymentStatusLabel,
   normalizeRidePayment,
 } from '@/services/ridePayment';
 import { formatRidePriceDzd } from '@/utils/rideTracking';
@@ -53,9 +51,98 @@ const SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE =
 const SCHEDULED_CITY_CONFIRMATION_MESSAGE =
   'Course ville confirmée — PROTAXI vous attribuera un chauffeur partenaire avant l\'horaire de votre course.';
 
+const green = '#8BC53F';
 const gold = '#D4A017';
+const muted = '#8A8A8A';
+const textPrimary = '#FFFFFF';
+const textSecondary = '#B8B8B8';
+const cardBg = 'rgba(14,14,14,0.98)';
+const glassBg = 'rgba(255,255,255,0.04)';
+const borderSoft = 'rgba(255,255,255,0.08)';
+const greenSoft = 'rgba(139,197,63,0.14)';
+const greenBorder = 'rgba(139,197,63,0.28)';
 const red = '#FF4B4B';
 const phoneLink = '+213671421448';
+
+type ReservationServiceKind = 'city' | 'airport' | 'private' | 'other';
+
+function normalizeServiceKey(service: unknown) {
+  return String(service || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function resolveReservationServiceKind(item: {
+  rideType?: unknown;
+  service?: unknown;
+}): ReservationServiceKind {
+  if (isScheduledCityRide(item) || String(item.rideType || '') === 'city') {
+    return 'city';
+  }
+  if (isScheduledAirportRide(item) || String(item.rideType || '') === 'airport') {
+    return 'airport';
+  }
+  if (
+    isScheduledPrivateDriverRide(item)
+    || String(item.rideType || '') === 'private_driver'
+  ) {
+    return 'private';
+  }
+
+  const key = normalizeServiceKey(item.service);
+  if (key.includes('ville') || key.includes('24h')) return 'city';
+  if (key.includes('aeroport') || key.includes('airport') || key.includes('transfert')) {
+    return 'airport';
+  }
+  if (key.includes('chauffeur') || key.includes('prive') || key.includes('private')) {
+    return 'private';
+  }
+
+  return 'other';
+}
+
+function getReservationCardIcon(
+  kind: ReservationServiceKind,
+): keyof typeof Ionicons.glyphMap {
+  if (kind === 'city') return 'car';
+  if (kind === 'airport') return 'airplane';
+  if (kind === 'private') return 'briefcase';
+  return 'car-outline';
+}
+
+function getReservationServiceTitle(item: {
+  service?: unknown;
+  rideType?: unknown;
+}) {
+  const kind = resolveReservationServiceKind(item);
+  const raw = String(item.service || '').trim();
+
+  if (kind === 'city') return raw || 'Taxi ville';
+  if (kind === 'airport') return raw || 'Transfert aéroport';
+  if (kind === 'private') return raw || 'Chauffeur privé';
+  return raw || 'Réservation PROTAXI';
+}
+
+function formatReservationPaymentLine(
+  item: {
+    rideType?: unknown;
+    rideMode?: unknown;
+    service?: unknown;
+  },
+  paymentStatus: string,
+): string {
+  const kind = resolveReservationServiceKind(item);
+  const isScheduledManaged =
+    isScheduledCityRide(item)
+    || isScheduledAirportRide(item)
+    || isScheduledPrivateDriverRide(item);
+
+  if (paymentStatus === 'paid') return 'Paiement : Réglé';
+  if (paymentStatus === 'cancelled') return 'Paiement : Annulé';
+  if (isScheduledManaged || kind === 'city') return 'Paiement : À bord';
+  return 'Paiement : À bord';
+}
 
 configureNotificationHandler();
 
@@ -79,14 +166,6 @@ function formatReservationBags(value: unknown): string {
     return count > 1 ? `${count} bagages` : `${count} bagage`;
   }
   return raw;
-}
-
-function getReservationCardIcon(item: {
-  rideType?: unknown;
-  service?: unknown;
-}): keyof typeof Ionicons.glyphMap {
-  if (isScheduledCityRide(item)) return 'car';
-  return 'airplane';
 }
 
 export default function ReservationsScreen() {
@@ -229,18 +308,17 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
   );
 };
 
- const getStatusStyle = (status: string, item: any) => {
+ const getStatusStyle = (status: string) => {
   if (status === 'Annulée') return styles.cancelledBadge;
-  if (status === 'Terminée') return styles.finishedBadge;
-  if (status === 'Arrivé') return styles.arrivedBadge;
-  if (status === 'En route') return styles.onWayBadge;
-  if (status === 'Acceptée' || status === 'Chauffeur confirmé') return styles.confirmedBadge;
+  if (status === 'Terminée' || status === 'Arrivé') return styles.successBadge;
+  if (status === 'En route') return styles.successBadge;
+  if (status === 'Acceptée' || status === 'Chauffeur confirmé') return styles.successBadge;
+  if (status === 'Confirmée') return styles.successBadge;
   if (status === 'Attribuée' || status === 'En attente confirmation chauffeur') {
-    return styles.searchBadge;
+    return styles.progressBadge;
   }
-  if (status === 'Confirmée') return styles.confirmedBadge;
-  if (status === 'À attribuer') return styles.pendingBadge;
-  return styles.pendingBadge;
+  if (status === 'À attribuer') return styles.progressBadge;
+  return styles.neutralBadge;
 };
 
  const getStatusIcon = (status: string) => {
@@ -272,13 +350,13 @@ Prix : ${formatRidePriceDzd(item.price, item.estimatedPrice, item.totalPrice)}`
           <Text style={styles.headerTitle}>Mes réservations</Text>
 
           <TouchableOpacity onPress={() => {}}>
-            <Ionicons name="refresh" size={25} color={gold} />
+            <Ionicons name="refresh" size={25} color={green} />
           </TouchableOpacity>
         </View>
 
         {reservations.length === 0 && (
           <View style={styles.emptyBox}>
-            <Ionicons name="calendar-outline" size={54} color={gold} />
+            <Ionicons name="calendar-outline" size={54} color={green} />
             <Text style={styles.emptyTitle}>Aucune réservation</Text>
             <Text style={styles.emptyText}>
               Vos prochaines courses apparaîtront ici.
@@ -299,13 +377,14 @@ const canTrack = canClientOpenCourseTracking(status, item);
 const showDriverDetails = shouldShowAssignedDriverToClient(status, item) && item.driverName;
 const canRate = isFinished && canClientRateDriverFromRide(item);
 const ridePayment = normalizeRidePayment(item);
-const paymentStatusConfig = getRidePaymentStatusConfig(ridePayment.paymentStatus);
 const reservationId = String(item.id || '').slice(-6);
-const cardIcon = getReservationCardIcon(item);
-const paymentStatusLabel =
-  isScheduledCity && ridePayment.paymentStatus === 'pending'
-    ? 'Paiement à bord'
-    : getRidePaymentStatusLabel(ridePayment.paymentStatus);
+const serviceKind = resolveReservationServiceKind(item);
+const cardIcon = getReservationCardIcon(serviceKind);
+const serviceTitle = getReservationServiceTitle(item);
+const paymentLine = formatReservationPaymentLine(item, ridePayment.paymentStatus);
+const showCityRoute =
+  serviceKind === 'city'
+  && (String(item.departure || '').trim() || String(item.destination || '').trim());
           
           return (
            <View key={item.id} style={styles.card}>
@@ -315,27 +394,25 @@ const paymentStatusLabel =
     {
       backgroundColor:
         !isCancelled && !isFinished
-          ? 'rgba(212,160,23,0.35)'
+          ? 'rgba(139,197,63,0.42)'
           : 'transparent',
     },
   ]}
 />
 
               <View style={styles.topRow}>
-                <View style={styles.airportBox}>
-                  <View style={styles.airIconBox}>
-                    <Ionicons name={cardIcon} size={22} color="#111" />
+                <View style={styles.serviceHeader}>
+                  <View style={styles.serviceIconBox}>
+                    <Ionicons name={cardIcon} size={22} color={green} />
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.airport}>
-                      {item.service || item.airport || 'Réservation PROTAXI'}
-                    </Text>
+                    <Text style={styles.serviceTitle}>{serviceTitle}</Text>
                     <Text style={styles.bookingId}>Réservation #{reservationId}</Text>
                   </View>
                 </View>
 
-                <View style={[styles.statusBadge, getStatusStyle(status, item)]}>
+                <View style={[styles.statusBadge, getStatusStyle(status)]}>
                   <Ionicons
                     name={getStatusIcon(status) as any}
                     size={14}
@@ -347,7 +424,7 @@ const paymentStatusLabel =
 
               {(isScheduledAirport || isScheduledPrivate || isScheduledCity) && status === 'Confirmée' ? (
                 <View style={styles.scheduledBanner}>
-                  <Ionicons name="shield-checkmark" size={18} color={gold} />
+                  <Ionicons name="shield-checkmark" size={18} color={green} />
                   <Text style={styles.scheduledBannerText}>
                     {isScheduledPrivate
                       ? SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE
@@ -359,7 +436,23 @@ const paymentStatusLabel =
               ) : null}
 
               <View style={styles.infoBox}>
-                <InfoRow icon="location-outline" text={item.address || '-'} />
+                {showCityRoute ? (
+                  <>
+                    <InfoRow
+                      icon="radio-button-on"
+                      text={`Départ : ${String(item.departure || item.address || '—').trim()}`}
+                    />
+                    <InfoRow
+                      icon="flag-outline"
+                      text={`Destination : ${String(item.destination || '—').trim()}`}
+                    />
+                  </>
+                ) : (
+                  <InfoRow
+                    icon="location-outline"
+                    text={item.address || item.departure || '-'}
+                  />
+                )}
                 <InfoRow icon="calendar-outline" text={item.date || '-'} />
                 <InfoRow icon="timer-outline" text={item.time || '-'} />
                 <InfoRow
@@ -390,31 +483,19 @@ const paymentStatusLabel =
                 ) : null}
 
                 <InfoRow
-  icon="cash-outline"
-  text={formatRidePaymentAmount(ridePayment.fareAmount)}
-/>
-
-                <View style={styles.paymentBadgeRow}>
-                  <View
-                    style={[
-                      styles.paymentBadge,
-                      {
-                        backgroundColor: paymentStatusConfig.glow,
-                        borderColor: paymentStatusConfig.border,
-                      },
-                    ]}
-                  >
-                    <Ionicons name="wallet-outline" size={14} color={paymentStatusConfig.color} />
-                    <Text style={[styles.paymentBadgeText, { color: paymentStatusConfig.color }]}>
-                      {paymentStatusLabel}
-                    </Text>
-                  </View>
-                </View>
-
-<InfoRow
-  icon="gift-outline"
-  text={`Points fidélité : ${item.clientPoints || 0}`}
-/>
+                  icon="cash-outline"
+                  text={formatRidePaymentAmount(ridePayment.fareAmount)}
+                  accent="gold"
+                />
+                <InfoRow
+                  icon="wallet-outline"
+                  text={paymentLine}
+                  accent={ridePayment.paymentStatus === 'paid' ? 'green' : 'muted'}
+                />
+                <InfoRow
+                  icon="gift-outline"
+                  text={`Points fidélité : ${item.clientPoints || 0}`}
+                />
                 {showDriverDetails ? (
   <>
     <InfoRow
@@ -440,7 +521,7 @@ const paymentStatusLabel =
                     })
                   }
                 >
-                  <Ionicons name="eye-outline" size={19} color={gold} />
+                  <Ionicons name="eye-outline" size={19} color={green} />
                   <Text style={styles.actionText}>Détails</Text>
                 </TouchableOpacity>
 
@@ -504,7 +585,7 @@ driverPhoto: item.driverPhoto || 'https://i.imgur.com/6VBx3io.png',
                   style={styles.actionBtn}
                   onPress={() => Linking.openURL(`tel:${phoneLink}`)}
                 >
-                  <Ionicons name="call" size={19} color={gold} />
+                  <Ionicons name="call" size={19} color={green} />
                   <Text style={styles.actionText}>Appeler</Text>
                 </TouchableOpacity>
 
@@ -512,7 +593,7 @@ driverPhoto: item.driverPhoto || 'https://i.imgur.com/6VBx3io.png',
                   style={styles.actionBtn}
                   onPress={() => openWhatsApp(item)}
                 >
-                  <Ionicons name="chatbubble-ellipses" size={19} color={gold} />
+                  <Ionicons name="chatbubble-ellipses" size={19} color={green} />
                   <Text style={styles.actionText}>WhatsApp</Text>
                 </TouchableOpacity>
 
@@ -538,11 +619,28 @@ driverPhoto: item.driverPhoto || 'https://i.imgur.com/6VBx3io.png',
   );
 }
 
-function InfoRow({ icon, text }: any) {
+function InfoRow({
+  icon,
+  text,
+  accent = 'muted',
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  text: string;
+  accent?: 'muted' | 'gold' | 'green';
+}) {
+  const iconColor = accent === 'gold' ? gold : accent === 'green' ? green : muted;
+
   return (
     <View style={styles.infoRow}>
-      <Ionicons name={icon} size={19} color={gold} />
-      <Text style={styles.infoText} numberOfLines={2}>
+      <Ionicons name={icon} size={19} color={iconColor} />
+      <Text
+        style={[
+          styles.infoText,
+          accent === 'gold' && styles.infoTextGold,
+          accent === 'green' && styles.infoTextGreen,
+        ]}
+        numberOfLines={2}
+      >
         {text}
       </Text>
     </View>
@@ -569,7 +667,7 @@ const styles = StyleSheet.create({
   },
 
   headerTitle: {
-    color: '#FFF',
+    color: textPrimary,
     fontSize: 23,
     fontWeight: '900',
   },
@@ -580,20 +678,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 25,
     borderRadius: 24,
-    backgroundColor: 'rgba(18,18,18,0.96)',
+    backgroundColor: cardBg,
     borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.25)',
+    borderColor: greenBorder,
   },
 
   emptyTitle: {
-    color: '#FFF',
+    color: textPrimary,
     fontSize: 22,
     fontWeight: '900',
     marginTop: 15,
   },
 
   emptyText: {
-    color: '#AAA',
+    color: textSecondary,
     textAlign: 'center',
     marginTop: 8,
     fontSize: 15,
@@ -601,13 +699,18 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: 'rgba(18,18,18,0.98)',
-    borderRadius: 26,
+    backgroundColor: cardBg,
+    borderRadius: 24,
     padding: 18,
     marginBottom: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: borderSoft,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
 
   glowLine: {
@@ -626,24 +729,26 @@ const styles = StyleSheet.create({
     gap: 10,
   },
 
-  airportBox: {
+  serviceHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     flex: 1,
   },
 
-  airIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 15,
-    backgroundColor: gold,
+  serviceIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: greenSoft,
+    borderWidth: 1,
+    borderColor: greenBorder,
     justifyContent: 'center',
     alignItems: 'center',
   },
 
-  airport: {
-    color: '#FFF',
+  serviceTitle: {
+    color: textPrimary,
     fontSize: 18,
     fontWeight: '900',
   },
@@ -655,24 +760,6 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
 
-  paymentBadgeRow: {
-    marginBottom: 8,
-    marginTop: 2,
-  },
-  paymentBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  paymentBadgeText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
   statusBadge: {
     paddingVertical: 7,
     paddingHorizontal: 10,
@@ -683,32 +770,28 @@ const styles = StyleSheet.create({
     maxWidth: 145,
   },
 
-  pendingBadge: {
-    backgroundColor: 'rgba(212,160,23,0.18)',
+  successBadge: {
+    backgroundColor: greenSoft,
+    borderWidth: 1,
+    borderColor: greenBorder,
   },
 
-  searchBadge: {
-    backgroundColor: 'rgba(212,160,23,0.25)',
+  progressBadge: {
+    backgroundColor: 'rgba(212,160,23,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,160,23,0.28)',
   },
 
-  confirmedBadge: {
-    backgroundColor: 'rgba(46,204,113,0.18)',
-  },
-
-  onWayBadge: {
-    backgroundColor: 'rgba(0,140,255,0.18)',
-  },
-
-  arrivedBadge: {
-    backgroundColor: 'rgba(155,89,182,0.18)',
-  },
-
-  finishedBadge: {
-    backgroundColor: 'rgba(46,204,113,0.24)',
+  neutralBadge: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: borderSoft,
   },
 
   cancelledBadge: {
-    backgroundColor: 'rgba(255,75,75,0.16)',
+    backgroundColor: 'rgba(255,75,75,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,75,75,0.28)',
   },
 
   statusText: {
@@ -724,20 +807,22 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     padding: 14,
     borderRadius: 16,
-    backgroundColor: 'rgba(139,197,63,0.1)',
+    backgroundColor: greenSoft,
     borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.22)',
+    borderColor: greenBorder,
   },
   scheduledBannerText: {
     flex: 1,
-    color: '#D8D8D8',
+    color: textSecondary,
     fontSize: 13,
     lineHeight: 19,
     fontWeight: '600',
   },
   infoBox: {
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.035)',
+    borderRadius: 18,
+    backgroundColor: glassBg,
+    borderWidth: 1,
+    borderColor: borderSoft,
     padding: 14,
     marginBottom: 12,
   },
@@ -750,10 +835,18 @@ const styles = StyleSheet.create({
   },
 
   infoText: {
-    color: '#DDD',
+    color: textSecondary,
     fontSize: 14,
     fontWeight: '700',
     flex: 1,
+  },
+
+  infoTextGold: {
+    color: gold,
+  },
+
+  infoTextGreen: {
+    color: green,
   },
 
   actions: {
@@ -765,9 +858,10 @@ const styles = StyleSheet.create({
   actionBtn: {
     flex: 1,
     height: 50,
-    borderRadius: 17,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.45)',
+    borderColor: borderSoft,
+    backgroundColor: 'rgba(255,255,255,0.02)',
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -775,7 +869,7 @@ const styles = StyleSheet.create({
   },
 
   actionText: {
-    color: '#FFF',
+    color: textPrimary,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -783,8 +877,8 @@ const styles = StyleSheet.create({
   trackingBtn: {
     flex: 1,
     height: 50,
-    borderRadius: 17,
-    backgroundColor: gold,
+    borderRadius: 16,
+    backgroundColor: green,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
@@ -794,8 +888,8 @@ const styles = StyleSheet.create({
   rateBtn: {
     flex: 1,
     height: 50,
-    borderRadius: 17,
-    backgroundColor: gold,
+    borderRadius: 16,
+    backgroundColor: green,
     justifyContent: 'center',
     alignItems: 'center',
     flexDirection: 'row',
