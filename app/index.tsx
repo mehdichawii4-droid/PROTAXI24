@@ -4,10 +4,7 @@ import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Alert,
   Animated,
-  Image,
-  ImageBackground,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -30,40 +27,55 @@ function extractFirstName(fullName?: string | null): string {
 }
 
 const green = '#8BC53F';
-const gold = '#D4A017';
 const bg = '#050505';
 const card = '#0D0D0D';
 const glow = 'rgba(139,197,63,0.18)';
 const muted = '#8A8A8A';
 const radiusLg = 28;
-const radiusMd = 24;
 
-type PrimaryExperienceAction = {
+type MainMenuTile = {
   id: string;
-  eyebrow: string;
-  title: string;
-  titleAccent: string;
-  subtitle: string;
-  image: number;
-  route: string;
-};
-
-type CompactQuickAction = {
-  id: string;
+  emoji: string;
   title: string;
   subtitle: string;
-  image: number;
   route: string;
+  source: string;
 };
 
-type ServiceGridItem = {
-  id: string;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  route: string;
-  badge?: string;
-  disabled?: boolean;
-};
+const MAIN_MENU_TILES: MainMenuTile[] = [
+  {
+    id: 'city',
+    emoji: '🚖',
+    title: 'Taxi ville',
+    subtitle: 'Course locale à Guelma',
+    route: PROTAXI_ROUTES.city,
+    source: 'home-taxi-ville',
+  },
+  {
+    id: 'airport',
+    emoji: '✈️',
+    title: 'Transfert aéroport',
+    subtitle: 'Départ ou arrivée aéroport',
+    route: PROTAXI_ROUTES.airport,
+    source: 'home-airport',
+  },
+  {
+    id: 'private-driver',
+    emoji: '👔',
+    title: 'Chauffeur privé',
+    subtitle: 'Trajet ou mise à disposition',
+    route: PROTAXI_ROUTES.privateDriver,
+    source: 'home-chauffeur-prive',
+  },
+  {
+    id: 'explorer',
+    emoji: '🌍',
+    title: 'Explorer Guelma',
+    subtitle: 'Patrimoine, nature, séjours',
+    route: PROTAXI_ROUTES.discoverGuelma,
+    source: 'home-explorer',
+  },
+];
 
 type NavItem = {
   id: string;
@@ -72,62 +84,6 @@ type NavItem = {
   route: string;
   badge?: number;
 };
-
-const PRIMARY_EXPERIENCE: PrimaryExperienceAction = {
-  id: 'experiences',
-  eyebrow: 'EXPÉRIENCES PRIVÉES',
-  title: 'Expériences privées',
-  titleAccent: 'premium',
-  subtitle: 'Nature, patrimoine et moments sur mesure à Guelma',
-  image: require('../assets/images/theatre-romain.jpg'),
-  route: PROTAXI_ROUTES.experiencesPrivate,
-};
-
-const COMPACT_QUICK_ACTIONS: CompactQuickAction[] = [
-  {
-    id: 'chauffeur',
-    title: 'Chauffeur privé',
-    subtitle: 'Trajet privé · à disposition',
-    image: require('../assets/images/services/chauffeur-prive.jpg'),
-    route: PROTAXI_ROUTES.privateDriver,
-  },
-  {
-    id: 'airport',
-    title: 'Transfert aéroport',
-    subtitle: 'Transferts premium',
-    image: require('../assets/images/airport-premium.jpg'),
-    route: PROTAXI_ROUTES.airport,
-  },
-];
-
-const SERVICE_GRID: ServiceGridItem[] = [
-  {
-    id: 'city',
-    label: 'Taxi ville',
-    icon: 'car-sport-outline',
-    route: PROTAXI_ROUTES.city,
-    badge: 'Bientôt',
-    disabled: true,
-  },
-  { id: 'long', label: 'Long trajet', icon: 'map-outline', route: PROTAXI_ROUTES.longDistance },
-  { id: 'hotels', label: 'Hôtels', icon: 'bed-outline', route: PROTAXI_ROUTES.hotel },
-  { id: 'airport', label: 'Aéroport', icon: 'airplane-outline', route: PROTAXI_ROUTES.airport },
-  {
-    id: 'circuits',
-    label: 'Explorer',
-    icon: 'compass-outline',
-    route: PROTAXI_ROUTES.discoverGuelma,
-    badge: 'NOUVEAU',
-  },
-  {
-    id: 'rental',
-    label: 'Location véhicules',
-    icon: 'key-outline',
-    route: PROTAXI_ROUTES.menu,
-    badge: 'NOUVEAU',
-  },
-  { id: 'more', label: 'Plus de services', icon: 'grid-outline', route: PROTAXI_ROUTES.menu },
-];
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Accueil', icon: 'home', route: PROTAXI_ROUTES.home },
@@ -140,15 +96,6 @@ const NAV_ITEMS: NavItem[] = [
     route: PROTAXI_ROUTES.notifications,
   },
   { id: 'profile', label: 'Profil', icon: 'person-outline', route: PROTAXI_ROUTES.profile },
-];
-
-const TRUST_FEATURES = [
-  { icon: 'shield-checkmark-outline' as const, label: 'Sécurisé et fiable' },
-  { icon: 'person-outline' as const, label: 'Chauffeurs pro' },
-  { icon: 'time-outline' as const, label: 'Disponible 24h/24' },
-  { icon: 'wallet-outline' as const, label: 'Paiement flexible' },
-  { icon: 'headset-outline' as const, label: 'Assistance 24/7' },
-  { icon: 'close-circle-outline' as const, label: 'Annulation facile' },
 ];
 
 function FadeSlideIn({
@@ -200,7 +147,7 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       void refreshUnreadCount();
-    }, [refreshUnreadCount])
+    }, [refreshUnreadCount]),
   );
 
   return (
@@ -219,71 +166,20 @@ export default function HomeScreen() {
         <HomeHeader firstName={firstName} unreadCount={unreadCount} />
 
         <FadeSlideIn delay={80}>
-          <PrimaryExperienceCard
-            action={PRIMARY_EXPERIENCE}
-            onPress={() =>
-              navigateTo(PRIMARY_EXPERIENCE.route, {
-                source: 'home-primary-experience',
-                label: PRIMARY_EXPERIENCE.title,
-              })
-            }
-          />
-
-          <View style={styles.compactQuickRow}>
-            {COMPACT_QUICK_ACTIONS.map((action) => (
-              <CompactQuickActionCard
-                key={action.id}
-                action={action}
+          <View style={styles.mainMenuGrid}>
+            {MAIN_MENU_TILES.map((tile) => (
+              <MainMenuTileCard
+                key={tile.id}
+                tile={tile}
                 onPress={() =>
-                  navigateTo(action.route, {
-                    source: 'home-compact-quick-actions',
-                    label: action.title,
+                  navigateTo(tile.route, {
+                    source: tile.source,
+                    label: tile.title,
                   })
                 }
               />
             ))}
           </View>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={200}>
-          <SectionHeader title="Autres services" subtitle="Compléments & à venir" />
-          <View style={styles.servicesGrid}>
-            {SERVICE_GRID.map((item) => (
-              <ServiceGridCard
-                key={item.id}
-                item={item}
-                onPress={() => {
-                  if (item.disabled) {
-                    Alert.alert(
-                      'Bientôt disponible',
-                      'Le service Taxi ville arrive prochainement sur PROTAXI.'
-                    );
-                    return;
-                  }
-
-                  navigateTo(item.route, {
-                    source: 'home-services-grid',
-                    label: item.label,
-                  });
-                }}
-              />
-            ))}
-          </View>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={280}>
-          <GuideSection
-            onPress={() =>
-              navigateTo(PROTAXI_ROUTES.discoverGuelma, {
-                source: 'home-guide-section',
-                label: 'Réserver un guide',
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={400}>
-          <TrustFeaturesRow />
         </FadeSlideIn>
       </ScrollView>
 
@@ -320,7 +216,7 @@ function HomeHeader({
             <MaterialCommunityIcons name="taxi" size={18} color={green} />
             <Text style={styles.logoText}>PROTAXI</Text>
           </View>
-          <Text style={styles.logoTagline}>EXPÉRIENCES · CHAUFFEUR · AÉROPORT</Text>
+          <Text style={styles.logoTagline}>MOBILITÉ · EXPLORER GUELMA</Text>
         </View>
 
         <TouchableOpacity
@@ -344,202 +240,32 @@ function HomeHeader({
         </TouchableOpacity>
       </View>
 
-      <View style={styles.greetingBlock}>
-        <Text style={styles.greeting}>Bonjour, {firstName} 👋</Text>
-        <Text style={styles.greetingSub}>Où allons-nous aujourd&apos;hui ?</Text>
-        <Text style={styles.greetingSlogan}>
-          Expériences, chauffeur privé et transferts premium en Guelma.
-        </Text>
-      </View>
+      <Text style={styles.greeting}>Bonjour, {firstName}</Text>
     </FadeSlideIn>
   );
 }
 
-function PrimaryExperienceCard({
-  action,
+function MainMenuTileCard({
+  tile,
   onPress,
 }: {
-  action: PrimaryExperienceAction;
+  tile: MainMenuTile;
   onPress: () => void;
 }) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.primaryHeroCard, pressed && styles.pressedScale]}
+      style={({ pressed }) => [styles.mainMenuTile, pressed && styles.pressedScale]}
       onPress={onPress}
     >
-      <ImageBackground
-        source={action.image}
-        style={styles.primaryHeroImage}
-        imageStyle={styles.primaryHeroImageStyle}
-      >
-        <LinearGradient
-          colors={['rgba(5,5,5,0.12)', 'rgba(5,5,5,0.5)', 'rgba(5,5,5,0.94)']}
-          style={styles.primaryHeroGradient}
-        >
-          <View style={styles.primaryHeroGlowOrb} />
-
-          <View style={styles.primaryHeroContent}>
-            <View style={styles.primaryHeroPill}>
-              <Text style={styles.primaryHeroPillText}>{action.eyebrow}</Text>
-            </View>
-
-            <View style={styles.primaryHeroTitleRow}>
-              <Text style={styles.primaryHeroTitle}>{action.title}</Text>
-              <Text style={styles.primaryHeroTitleAccent}> {action.titleAccent}</Text>
-            </View>
-
-            <View style={styles.primaryHeroAccentLine} />
-
-            <Text style={styles.primaryHeroSubtitle}>{action.subtitle}</Text>
-
-            <View style={styles.primaryHeroFooter}>
-              <TouchableOpacity style={styles.primaryHeroCta} activeOpacity={0.9} onPress={onPress}>
-                <Text style={styles.primaryHeroCtaText}>Explorer</Text>
-                <Ionicons name="chevron-forward" size={16} color="#111" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        </LinearGradient>
-      </ImageBackground>
-    </Pressable>
-  );
-}
-
-function CompactQuickActionCard({
-  action,
-  onPress,
-}: {
-  action: CompactQuickAction;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.compactQuickCard, pressed && styles.pressedScale]}
-      onPress={onPress}
-    >
-      <ImageBackground
-        source={action.image}
-        style={styles.compactQuickImage}
-        imageStyle={styles.compactQuickImageStyle}
-      >
-        <LinearGradient
-          colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.9)']}
-          style={styles.compactQuickGradient}
-        >
-          <View style={styles.compactQuickFooter}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.compactQuickTitle}>{action.title}</Text>
-              <Text style={styles.compactQuickSubtitle} numberOfLines={2}>
-                {action.subtitle}
-              </Text>
-            </View>
-            <View style={styles.compactQuickArrow}>
-              <Ionicons name="arrow-forward" size={14} color="#111" />
-            </View>
-          </View>
-        </LinearGradient>
-      </ImageBackground>
-    </Pressable>
-  );
-}
-
-function ServiceGridCard({
-  item,
-  onPress,
-}: {
-  item: ServiceGridItem;
-  onPress: () => void;
-}) {
-  const isDisabled = Boolean(item.disabled);
-
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.gridCard,
-        isDisabled && styles.gridCardDisabled,
-        pressed && !isDisabled && styles.pressedScale,
-      ]}
-      onPress={onPress}
-    >
-      {item.badge ? (
-        <View style={[styles.gridBadge, isDisabled && styles.gridBadgeSoon]}>
-          <Text style={[styles.gridBadgeText, isDisabled && styles.gridBadgeTextSoon]}>
-            {item.badge}
-          </Text>
-        </View>
-      ) : null}
-
-      <View style={[styles.gridIconWrap, isDisabled && styles.gridIconWrapDisabled]}>
-        <Ionicons name={item.icon} size={24} color={isDisabled ? muted : green} />
-      </View>
-
-      <Text style={[styles.gridLabel, isDisabled && styles.gridLabelDisabled]} numberOfLines={2}>
-        {item.label}
+      <Text style={styles.mainMenuEmoji}>{tile.emoji}</Text>
+      <Text style={styles.mainMenuTitle}>{tile.title}</Text>
+      <Text style={styles.mainMenuSubtitle} numberOfLines={2}>
+        {tile.subtitle}
       </Text>
-
-      {isDisabled ? (
-        <Text style={styles.gridSoonHint} numberOfLines={2}>
-          Bientôt disponible
-        </Text>
-      ) : null}
+      <View style={styles.mainMenuArrow}>
+        <Ionicons name="arrow-forward" size={16} color="#111" />
+      </View>
     </Pressable>
-  );
-}
-
-function GuideSection({ onPress }: { onPress: () => void }) {
-  return (
-    <View style={styles.guideCard}>
-      <Image
-        source={require('../assets/images/services/chauffeur-prive.jpg')}
-        style={styles.guideImage}
-        resizeMode="cover"
-      />
-
-      <LinearGradient
-        colors={['rgba(5,5,5,0.1)', 'rgba(5,5,5,0.75)', 'rgba(5,5,5,0.95)']}
-        style={styles.guideGradient}
-      />
-
-      <View style={styles.guideContent}>
-        <Text style={styles.guideEyebrow}>EXPÉRIENCE LOCAL</Text>
-        <Text style={styles.guideTitle}>Besoin d&apos;un guide ?</Text>
-        <Text style={styles.guideDesc}>
-          Explorez Guelma avec un accompagnateur professionnel et un chauffeur PROTAXI.
-        </Text>
-
-        <TouchableOpacity style={styles.guideCta} activeOpacity={0.9} onPress={onPress}>
-          <Text style={styles.guideCtaText}>Réserver un guide</Text>
-          <Ionicons name="arrow-forward" size={16} color="#111" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-function TrustFeaturesRow() {
-  return (
-    <View style={styles.trustSection}>
-      <View style={styles.trustGrid}>
-        {TRUST_FEATURES.map((feature) => (
-          <View key={feature.label} style={styles.trustItem}>
-            <View style={styles.trustIconWrap}>
-              <Ionicons name={feature.icon} size={18} color={green} />
-            </View>
-            <Text style={styles.trustLabel}>{feature.label}</Text>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {subtitle ? <Text style={styles.sectionSubtitle}>{subtitle}</Text> : null}
-      <View style={styles.sectionAccent} />
-    </View>
   );
 }
 
@@ -625,7 +351,7 @@ const styles = StyleSheet.create({
   },
 
   headerWrap: {
-    marginBottom: 24,
+    marginBottom: 28,
     paddingTop: 6,
   },
 
@@ -633,7 +359,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   topIconBtn: {
@@ -693,10 +419,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  greetingBlock: {
-    gap: 6,
-  },
-
   greeting: {
     color: '#FFF',
     fontSize: 28,
@@ -704,190 +426,51 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
 
-  greetingSub: {
-    color: '#D4D4D4',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-
-  greetingSlogan: {
-    color: muted,
-    fontSize: 13,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-
-  primaryHeroCard: {
-    height: 258,
-    borderRadius: radiusLg,
-    overflow: 'hidden',
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(201,162,39,0.22)',
-    ...cardShadow,
-  },
-
-  primaryHeroImage: {
-    flex: 1,
-  },
-
-  primaryHeroImageStyle: {
-    borderRadius: radiusLg,
-  },
-
-  primaryHeroGradient: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    padding: 22,
-  },
-
-  primaryHeroGlowOrb: {
-    position: 'absolute',
-    top: 20,
-    right: 20,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(201,162,39,0.12)',
-  },
-
-  primaryHeroContent: {
-    gap: 6,
-  },
-
-  primaryHeroPill: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(201,162,39,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(201,162,39,0.38)',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginBottom: 4,
-  },
-
-  primaryHeroPillText: {
-    color: gold,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.9,
-  },
-
-  primaryHeroTitleRow: {
+  mainMenuGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    alignItems: 'flex-end',
-    maxWidth: '92%',
-  },
-
-  primaryHeroTitle: {
-    color: '#FFF',
-    fontSize: 26,
-    fontWeight: '900',
-    lineHeight: 30,
-  },
-
-  primaryHeroTitleAccent: {
-    color: green,
-    fontSize: 26,
-    fontWeight: '900',
-    lineHeight: 30,
-  },
-
-  primaryHeroAccentLine: {
-    width: 32,
-    height: 1,
-    borderRadius: 1,
-    backgroundColor: gold,
-    opacity: 0.6,
-    marginTop: 2,
-    marginBottom: 2,
-  },
-
-  primaryHeroSubtitle: {
-    color: 'rgba(255,255,255,0.74)',
-    fontSize: 13,
-    lineHeight: 19,
-    maxWidth: '90%',
-    fontWeight: '500',
-  },
-
-  primaryHeroFooter: {
-    marginTop: 10,
-  },
-
-  primaryHeroCta: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 999,
-    backgroundColor: green,
-  },
-
-  primaryHeroCtaText: {
-    color: '#111',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-
-  compactQuickRow: {
-    flexDirection: 'row',
+    justifyContent: 'space-between',
     gap: 14,
-    marginBottom: 24,
   },
 
-  compactQuickCard: {
-    flex: 1,
-    height: 148,
-    borderRadius: radiusMd,
-    overflow: 'hidden',
+  mainMenuTile: {
+    width: '47.5%',
+    minHeight: 168,
+    backgroundColor: card,
+    borderRadius: radiusLg,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
+    borderColor: 'rgba(139,197,63,0.18)',
+    padding: 18,
+    justifyContent: 'flex-end',
     ...cardShadow,
   },
 
-  compactQuickImage: {
-    flex: 1,
+  mainMenuEmoji: {
+    fontSize: 32,
+    marginBottom: 12,
   },
 
-  compactQuickImageStyle: {
-    borderRadius: radiusMd,
-  },
-
-  compactQuickGradient: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    padding: 14,
-  },
-
-  compactQuickFooter: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-
-  compactQuickTitle: {
+  mainMenuTitle: {
     color: '#FFF',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '900',
-    lineHeight: 17,
+    lineHeight: 20,
+    marginBottom: 6,
   },
 
-  compactQuickSubtitle: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 10,
-    marginTop: 3,
+  mainMenuSubtitle: {
+    color: muted,
+    fontSize: 12,
     fontWeight: '600',
-    lineHeight: 13,
+    lineHeight: 17,
+    marginBottom: 14,
   },
 
-  compactQuickArrow: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  mainMenuArrow: {
+    alignSelf: 'flex-start',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: green,
     justifyContent: 'center',
     alignItems: 'center',
@@ -896,233 +479,6 @@ const styles = StyleSheet.create({
   pressedScale: {
     opacity: 0.94,
     transform: [{ scale: 0.985 }],
-  },
-
-  sectionHeader: {
-    marginBottom: 18,
-  },
-
-  sectionTitle: {
-    color: '#FFF',
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: -0.3,
-  },
-
-  sectionSubtitle: {
-    color: muted,
-    fontSize: 13,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-
-  sectionAccent: {
-    width: 42,
-    height: 4,
-    borderRadius: 4,
-    backgroundColor: green,
-    marginTop: 10,
-  },
-
-  servicesGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: 24,
-  },
-
-  gridCard: {
-    width: '23%',
-    minWidth: 74,
-    aspectRatio: 0.82,
-    backgroundColor: card,
-    borderRadius: radiusMd,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.05)',
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-    position: 'relative',
-  },
-
-  gridCardDisabled: {
-    opacity: 0.62,
-    borderColor: 'rgba(255,255,255,0.03)',
-  },
-
-  gridBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 4,
-    backgroundColor: green,
-    borderRadius: 6,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    zIndex: 2,
-  },
-
-  gridBadgeSoon: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-
-  gridBadgeText: {
-    color: '#111',
-    fontSize: 7,
-    fontWeight: '900',
-  },
-
-  gridBadgeTextSoon: {
-    color: muted,
-    fontSize: 6,
-  },
-
-  gridIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: glow,
-    borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.22)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-
-  gridIconWrapDisabled: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderColor: 'rgba(255,255,255,0.06)',
-  },
-
-  gridLabel: {
-    color: '#FFF',
-    fontSize: 10,
-    fontWeight: '800',
-    textAlign: 'center',
-    lineHeight: 13,
-  },
-
-  gridLabelDisabled: {
-    color: 'rgba(255,255,255,0.55)',
-  },
-
-  gridSoonHint: {
-    color: muted,
-    fontSize: 7,
-    fontWeight: '700',
-    textAlign: 'center',
-    lineHeight: 9,
-    marginTop: 4,
-  },
-
-  guideCard: {
-    height: 220,
-    borderRadius: radiusLg,
-    overflow: 'hidden',
-    marginBottom: 24,
-    backgroundColor: card,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
-    ...cardShadow,
-  },
-
-  guideImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: '100%',
-    height: '100%',
-  },
-
-  guideGradient: {
-    ...StyleSheet.absoluteFillObject,
-  },
-
-  guideContent: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    padding: 22,
-    zIndex: 2,
-  },
-
-  guideEyebrow: {
-    color: green,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 1,
-    marginBottom: 8,
-  },
-
-  guideTitle: {
-    color: '#FFF',
-    fontSize: 24,
-    fontWeight: '900',
-  },
-
-  guideDesc: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
-    maxWidth: '92%',
-  },
-
-  guideCta: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 999,
-    backgroundColor: green,
-  },
-
-  guideCtaText: {
-    color: '#111',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-
-  trustSection: {
-    marginBottom: 8,
-    paddingTop: 4,
-  },
-
-  trustGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-
-  trustItem: {
-    width: '30%',
-    minWidth: 96,
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 8,
-  },
-
-  trustIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: card,
-    borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.18)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  trustLabel: {
-    color: muted,
-    fontSize: 10,
-    fontWeight: '700',
-    textAlign: 'center',
-    lineHeight: 13,
   },
 
   bottomNavSafe: {
