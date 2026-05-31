@@ -1,9 +1,10 @@
-import { addDoc, collection } from 'firebase/firestore';
+import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { router } from 'expo-router';
 
 import { db } from '@/firebaseConfig';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
 import { buildRidePaymentCreateFields } from '@/services/ridePayment';
+import { SCHEDULED_AIRPORT_RIDE_MODE } from '@/types/driver';
 import { buildMapCoordinate, isValidMapCoordinate } from '@/utils/rideTracking';
 
 export type CityRideMode = 'Maintenant' | 'Réserver plus tard';
@@ -28,6 +29,7 @@ export type CityRideInput = {
   estimatedPrice?: number;
   pickupLatitude?: number;
   pickupLongitude?: number;
+  scheduledAt?: Date;
   partnerId?: string;
   partnerName?: string;
 };
@@ -39,7 +41,7 @@ export type CityRideProfileContext = {
 };
 
 export type SubmitCityRideResult =
-  | { status: 'scheduled' }
+  | { status: 'scheduled'; rideId: string }
   | { status: 'tracking'; rideId: string }
   | { status: 'auth_required' }
   | { status: 'missing_ride_id' }
@@ -89,32 +91,89 @@ export async function submitCityRide(
       return { status: 'auth_required' };
     }
 
-    router.push({
-      pathname: '/confirmation',
-      params: {
-        service: input.service || 'Ville 24H',
-        departure: input.departure || 'Départ à confirmer',
-        destination: input.destination || 'Destination à confirmer',
-        date: input.date || 'À confirmer',
-        time: input.time || 'À confirmer',
-        price: priceClean,
-        rideMode: 'Réserver plus tard',
+    const scheduledAt = input.scheduledAt;
+    if (!(scheduledAt instanceof Date) || Number.isNaN(scheduledAt.getTime())) {
+      return { status: 'error', error: new Error('invalid_scheduled_at') };
+    }
+
+    try {
+      const departure = String(input.departure || 'Départ à confirmer');
+      const destination = String(input.destination || 'Destination à confirmer');
+      const price = String(input.price || 'Sur confirmation');
+      const clientName =
+        String(input.fullName || '').trim() ||
+        String(context.profileFullName || '').trim() ||
+        'Client PROTAXI';
+
+      const partnerFields = pickPartnerFieldsFromParams({
+        partnerId: input.partnerId,
+        partnerName: input.partnerName,
+      });
+
+      const pickup = buildMapCoordinate(input.pickupLatitude, input.pickupLongitude);
+      const pickupFields = isValidMapCoordinate(pickup)
+        ? {
+            clientLatitude: pickup.latitude,
+            clientLongitude: pickup.longitude,
+            latitude: pickup.latitude,
+            longitude: pickup.longitude,
+          }
+        : {};
+
+      const date = scheduledAt.toLocaleDateString('fr-FR');
+      const time = scheduledAt.toLocaleTimeString('fr-FR', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      const rideDoc = await addDoc(collection(db, 'rides'), {
+        clientUid,
+        clientName,
+        client: clientName,
+        phone: String(input.phone || context.profilePhone || 'Non renseigné'),
+        service: String(input.service || 'Ville 24H'),
+        rideType: 'city',
+        rideMode: SCHEDULED_AIRPORT_RIDE_MODE,
+        status: 'Confirmée',
+        departure,
+        destination,
+        address: departure,
+        date,
+        time,
         passengers: String(input.passengers || '1'),
         bags: String(input.bags || '0'),
-        fullName:
-          String(input.fullName || '').trim() ||
-          String(context.profileFullName || '').trim() ||
-          'Client PROTAXI',
-        phone: String(input.phone || context.profilePhone || 'Non renseigné'),
+        waitingTime: String(input.waitingTime || ''),
         notes: String(input.notes || ''),
-        message: 'Votre course a été programmée avec succès.',
-        ...pickPartnerFieldsFromParams({
-          partnerId: input.partnerId,
-          partnerName: input.partnerName,
+        price,
+        vehicleType: String(input.vehicleType || ''),
+        estimatedDuration: input.estimatedDuration ?? 0,
+        estimatedPrice: input.estimatedPrice ?? 0,
+        driverName: '',
+        driverPhone: '',
+        driverCar: '',
+        driverId: '',
+        createdAt: new Date(),
+        scheduledAt: Timestamp.fromDate(scheduledAt),
+        ...buildRidePaymentCreateFields({
+          price,
+          estimatedPrice: input.estimatedPrice,
         }),
-      },
-    });
-    return { status: 'scheduled' };
+        ...pickupFields,
+        ...partnerFields,
+      });
+
+      if (!rideDoc.id) {
+        return { status: 'missing_ride_id' };
+      }
+
+      router.replace({
+        pathname: '/reservation',
+      });
+
+      return { status: 'scheduled', rideId: rideDoc.id };
+    } catch (error) {
+      return { status: 'error', error };
+    }
   }
 
   const clientUid = context.clientUid?.trim();

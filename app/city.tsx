@@ -419,6 +419,7 @@ export default function CityScreen() {
           vehicleType: rideData.selectedVehicle,
           estimatedDuration: rideData.estimatedDuration,
           estimatedPrice: rideData.estimatedPrice,
+          ...(rideMode === 'Réserver plus tard' ? { scheduledAt: bookingDate } : {}),
           ...(isValidMapCoordinate(pickupCoordinate)
             ? {
                 pickupLatitude: pickupCoordinate.latitude,
