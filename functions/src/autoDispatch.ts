@@ -1,7 +1,7 @@
 import * as admin from 'firebase-admin';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions/v2';
-import { shouldSkipAutoDispatchForOpenPool } from './rideScope';
+import { isImmediateCityRide, shouldSkipAutoDispatchForOpenPool } from './rideScope';
 
 type DriverAvailability = 'offline' | 'available' | 'pending_accept' | 'busy';
 
@@ -488,6 +488,32 @@ async function autoDispatchNearestEligibleDriver(params: {
   throw lastError ?? new AutoDispatchError('no_driver', 'Aucun chauffeur disponible.');
 }
 
+async function markImmediateCityOpenPool(
+  db: admin.firestore.Firestore,
+  rideId: string,
+): Promise<void> {
+  const rideRef = db.doc(`rides/${rideId}`);
+  const rideSnap = await rideRef.get();
+  if (!rideSnap.exists) return;
+
+  const ride = rideSnap.data() ?? {};
+  if (!isImmediateCityRide(ride)) return;
+  if (ride.openPool === true) return;
+  if (hasAssignedDriverId(ride.driverId)) return;
+
+  await rideRef.update({
+    status: 'En attente',
+    driverId: '',
+    driverName: '',
+    driverPhone: '',
+    driverPhoto: '',
+    driverPlate: '',
+    driverCar: '',
+    openPool: true,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
 export async function attemptAutoDispatchForRide(
   db: admin.firestore.Firestore,
   rideId: string,
@@ -529,7 +555,14 @@ export async function attemptAutoDispatchForRide(
   } catch (error) {
     if (error instanceof AutoDispatchError) {
       if (error.code === 'no_driver') {
-        logger.info('[DISPATCH V2] no driver — ride stays En attente', { rideId });
+        if (isImmediateCityRide(ride)) {
+          await markImmediateCityOpenPool(db, rideId);
+          logger.info('[DISPATCH V2] immediate city open pool — no eligible driver', {
+            rideId,
+          });
+        } else {
+          logger.info('[DISPATCH V2] no driver — ride stays En attente', { rideId });
+        }
         return;
       }
 
