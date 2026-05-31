@@ -129,6 +129,7 @@ type Props = {
   onOpenPayment: () => void;
   onOpenNotes: () => void;
   isSubmitting: boolean;
+  confirmCtaLabel?: string;
   onCommander: () => void;
   bottomInset: number;
   sheetHeightShared?: SharedValue<number>;
@@ -295,6 +296,7 @@ export default function CityVehicleBottomSheet({
   onOpenPayment,
   onOpenNotes,
   isSubmitting,
+  confirmCtaLabel = 'Commander',
   onCommander,
   bottomInset,
   sheetHeightShared,
@@ -501,13 +503,14 @@ export default function CityVehicleBottomSheet({
                 <Text style={styles.commanderText}>Recherche d&apos;un chauffeur...</Text>
               </View>
             ) : (
-              <Text style={styles.commanderText}>Commander</Text>
+              <Text style={styles.commanderText}>{confirmCtaLabel}</Text>
             )}
           </TouchableOpacity>
         </View>
       </BottomSheetFooter>
     ),
     [
+      confirmCtaLabel,
       footerPad,
       isSubmitting,
       notesPreview,

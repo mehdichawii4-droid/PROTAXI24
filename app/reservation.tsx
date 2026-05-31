@@ -59,6 +59,36 @@ const phoneLink = '+213671421448';
 
 configureNotificationHandler();
 
+function formatReservationPassengers(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '1 passager';
+  if (/passager/i.test(raw)) return raw;
+  const count = Number.parseInt(raw, 10);
+  if (Number.isFinite(count)) {
+    return count > 1 ? `${count} passagers` : `${count} passager`;
+  }
+  return raw;
+}
+
+function formatReservationBags(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '0 bagage';
+  if (/bagage/i.test(raw)) return raw;
+  const count = Number.parseInt(raw, 10);
+  if (Number.isFinite(count)) {
+    return count > 1 ? `${count} bagages` : `${count} bagage`;
+  }
+  return raw;
+}
+
+function getReservationCardIcon(item: {
+  rideType?: unknown;
+  service?: unknown;
+}): keyof typeof Ionicons.glyphMap {
+  if (isScheduledCityRide(item)) return 'car';
+  return 'airplane';
+}
+
 export default function ReservationsScreen() {
   const { user } = useAuth();
   const [reservations, setReservations] = useState<any[]>([]);
@@ -271,6 +301,11 @@ const canRate = isFinished && canClientRateDriverFromRide(item);
 const ridePayment = normalizeRidePayment(item);
 const paymentStatusConfig = getRidePaymentStatusConfig(ridePayment.paymentStatus);
 const reservationId = String(item.id || '').slice(-6);
+const cardIcon = getReservationCardIcon(item);
+const paymentStatusLabel =
+  isScheduledCity && ridePayment.paymentStatus === 'pending'
+    ? 'Paiement à bord'
+    : getRidePaymentStatusLabel(ridePayment.paymentStatus);
           
           return (
            <View key={item.id} style={styles.card}>
@@ -289,7 +324,7 @@ const reservationId = String(item.id || '').slice(-6);
               <View style={styles.topRow}>
                 <View style={styles.airportBox}>
                   <View style={styles.airIconBox}>
-                    <Ionicons name="airplane" size={22} color="#111" />
+                    <Ionicons name={cardIcon} size={22} color="#111" />
                   </View>
 
                   <View style={{ flex: 1 }}>
@@ -329,11 +364,11 @@ const reservationId = String(item.id || '').slice(-6);
                 <InfoRow icon="timer-outline" text={item.time || '-'} />
                 <InfoRow
                   icon="people-outline"
-                  text={`${item.passengers || '1'} passagers`}
+                  text={formatReservationPassengers(item.passengers)}
                 />
                 <InfoRow
                   icon="briefcase-outline"
-                  text={`${item.bags || '0'} bagages`}
+                  text={formatReservationBags(item.bags)}
                 />
                 {String(item.flightNumber || '').trim() ? (
                   <InfoRow
@@ -371,7 +406,7 @@ const reservationId = String(item.id || '').slice(-6);
                   >
                     <Ionicons name="wallet-outline" size={14} color={paymentStatusConfig.color} />
                     <Text style={[styles.paymentBadgeText, { color: paymentStatusConfig.color }]}>
-                      {getRidePaymentStatusLabel(ridePayment.paymentStatus)}
+                      {paymentStatusLabel}
                     </Text>
                   </View>
                 </View>

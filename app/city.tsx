@@ -677,6 +677,11 @@ export default function CityScreen() {
             }
             onOpenNotes={() => setNotesModalVisible(true)}
             isSubmitting={isSubmitting}
+            confirmCtaLabel={
+              rideMode === 'Réserver plus tard'
+                ? 'Confirmer la réservation'
+                : 'Commander'
+            }
             onCommander={handleCommanderPress}
             bottomInset={panelBottomInset}
             sheetHeightShared={sheetHeightShared}
