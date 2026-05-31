@@ -81,6 +81,37 @@ export function isScheduledCityRide(
   );
 }
 
+type ImmediateCityRideContext = {
+  rideType?: unknown;
+  rideMode?: unknown;
+  service?: unknown;
+} | null | undefined;
+
+/** Taxi Ville Maintenant — hors planifié, aéroport et chauffeur privé. */
+export function isImmediateCityRide(ride: ImmediateCityRideContext): boolean {
+  if (!ride) return false;
+  if (isScheduledManagedRide(ride)) return false;
+
+  const rideType = String(ride.rideType || '').trim();
+  if (rideType === 'airport' || rideType === 'private_driver') return false;
+
+  if (String(ride.rideMode || '').trim() !== 'Maintenant') return false;
+
+  if (rideType === 'city') return true;
+
+  const service = String(ride.service || '').toLowerCase();
+  return service.includes('ville') || service.includes('24h');
+}
+
+/** Course ville immédiate en pool ouvert (En attente, sans chauffeur assigné). */
+export function isOpenPoolCityRide(
+  ride: (ImmediateCityRideContext & { status?: unknown; driverId?: unknown }) | null,
+): boolean {
+  if (!isImmediateCityRide(ride)) return false;
+  if (normalizeRideStatus(String(ride?.status || '')) !== 'En attente') return false;
+  return !hasAssignedDriverId(ride?.driverId);
+}
+
 /** Transfert aéroport, chauffeur privé ou taxi ville planifié (même pipeline admin/chauffeur). */
 export function isScheduledManagedRide(
   ride: { rideType?: unknown; rideMode?: unknown } | null | undefined,
