@@ -111,6 +111,9 @@ function getCompactGpsBadgeLabel(badge: DriverGpsBadge): string | null {
 }
 
 function getHeaderStatusShort(status: string, displayStatus: string): string {
+  if (displayStatus === 'En attente de chauffeur') {
+    return 'En attente de chauffeur';
+  }
   if (displayStatus === "Recherche d'un autre chauffeur") {
     return 'Recherche chauffeur';
   }
@@ -123,7 +126,9 @@ function getHeaderStatusShort(status: string, displayStatus: string): string {
 }
 
 function getStatusAccentColor(label: string): string {
-  if (label === 'En attente' || label === 'Recherche chauffeur') return gold;
+  if (label === 'En attente' || label === 'Recherche chauffeur' || label === 'En attente de chauffeur') {
+    return gold;
+  }
   if (label === 'Chauffeur trouvé' || label === 'Attribuée') return blue;
   if (label === 'Le chauffeur arrive' || label === 'Acceptée') return green;
   if (label === 'Chauffeur proche') return green;
@@ -333,8 +338,21 @@ const lastRealGpsAtRef = useRef(0);
     ],
   );
 
-  const displayStatus =
-    status === 'En attente' && rejectedDriverIds.length > 0
+  const isOpenPoolWaiting = useMemo(() => {
+    if (!rideData) return false;
+
+    return (
+      String(rideData.rideType || '') === 'city'
+      && String(rideData.rideMode || '') === 'Maintenant'
+      && status === 'En attente'
+      && rideData.openPool === true
+      && !driverId
+    );
+  }, [rideData, status, driverId]);
+
+  const displayStatus = isOpenPoolWaiting
+    ? 'En attente de chauffeur'
+    : status === 'En attente' && rejectedDriverIds.length > 0
       ? 'Recherche d\'un autre chauffeur'
       : status;
 
@@ -345,6 +363,7 @@ const lastRealGpsAtRef = useRef(0);
     simulationActiveRef.current &&
     status === 'En attente' &&
     !driverId &&
+    !isOpenPoolWaiting &&
     displayStatus === 'En attente';
   const effectiveStatusLabel = isUiSimulationActive ? uiStatusLabel : headerStatusShort;
   const effectiveEtaMinutes = isUiSimulationActive ? simulatedEtaMin : etaMinutes;
@@ -441,6 +460,11 @@ const lastRealGpsAtRef = useRef(0);
       stopStatusSimulation();
     };
   }, [hasValidRide, rideId]);
+
+  useEffect(() => {
+    if (!isOpenPoolWaiting) return;
+    stopStatusSimulation();
+  }, [isOpenPoolWaiting]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -1124,6 +1148,12 @@ const openNavigationToClient = () => {
             </View>
           </View>
 
+          {isOpenPoolWaiting ? (
+            <Text style={styles.openPoolStatusHint}>
+              Votre demande est active. Un chauffeur peut l'accepter à tout moment.
+            </Text>
+          ) : null}
+
           <View style={styles.metaLine}>
           {compactGpsBadge ? (
             <View style={[styles.gpsCapsule, styles.gpsCapsuleWeak]}>
@@ -1539,6 +1569,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+
+  openPoolStatusHint: {
+    color: '#8A8A8A',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    marginBottom: 8,
   },
 
   metaLine: {
