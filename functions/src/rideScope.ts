@@ -4,10 +4,6 @@ export const MAX_IMMEDIATE_CITY_AUTO_ASSIGN_ATTEMPTS = 1;
 
 type RideScopeContext = Record<string, unknown> | null | undefined;
 
-function hasAssignedDriverId(driverId: unknown): boolean {
-  return String(driverId || '').trim().length > 0;
-}
-
 function isScheduledManagedRide(ride: RideScopeContext): boolean {
   if (!ride) return false;
   const rideType = String(ride.rideType || '').trim();
