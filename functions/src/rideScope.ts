@@ -1,5 +1,6 @@
 export const SCHEDULED_RIDE_MODE = 'Réserver plus tard';
-export const MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH = 3;
+/** Une seule tentative auto-dispatch pour Taxi Ville Maintenant, puis pool ouvert. */
+export const MAX_IMMEDIATE_CITY_AUTO_ASSIGN_ATTEMPTS = 1;
 
 type RideScopeContext = Record<string, unknown> | null | undefined;
 
@@ -38,6 +39,11 @@ export function shouldSkipAutoDispatchForOpenPool(ride: RideScopeContext): boole
   if (!isImmediateCityRide(ride)) return false;
   if (ride?.openPool === true) return true;
 
+  const dispatchAttempt = Number(ride?.dispatchAttempt ?? 0);
   const redispatchCount = Number(ride?.redispatchCount ?? 0);
-  return redispatchCount >= MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH;
+
+  return (
+    dispatchAttempt >= MAX_IMMEDIATE_CITY_AUTO_ASSIGN_ATTEMPTS
+    || redispatchCount >= 1
+  );
 }

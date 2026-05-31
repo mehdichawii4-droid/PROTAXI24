@@ -7,7 +7,7 @@ import { logger } from 'firebase-functions/v2';
 import { attemptAutoDispatchForRide } from './autoDispatch';
 import {
   isImmediateCityRide,
-  MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH,
+  MAX_IMMEDIATE_CITY_AUTO_ASSIGN_ATTEMPTS,
   shouldSkipAutoDispatchForOpenPool,
 } from './rideScope';
 
@@ -694,29 +694,29 @@ export const onRideAssignmentTimeout = onSchedule(
           redispatchCount = Number(ride.redispatchCount ?? 0) + 1;
           const updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
-          if (redispatchCount >= MAX_AUTO_REDISPATCH) {
-            if (isImmediateCityRide(ride)) {
-              const openPoolUpdate: Record<string, unknown> = {
-                status: 'En attente',
-                driverId: '',
-                driverName: '',
-                driverPhone: '',
-                driverPhoto: '',
-                driverPlate: '',
-                driverCar: '',
-                redispatchCount,
-                openPool: true,
-                lastAutoRedispatchAt: updatedAt,
-                updatedAt,
-              };
-              if (driverId) {
-                openPoolUpdate.rejectedDriverIds = admin.firestore.FieldValue.arrayUnion(driverId);
-              }
-              transaction.update(rideDoc.ref, openPoolUpdate);
-              await releaseDriverLive(transaction, driverId);
-              return 'open_pool';
+          if (isImmediateCityRide(ride)) {
+            const openPoolUpdate: Record<string, unknown> = {
+              status: 'En attente',
+              driverId: '',
+              driverName: '',
+              driverPhone: '',
+              driverPhoto: '',
+              driverPlate: '',
+              driverCar: '',
+              redispatchCount,
+              openPool: true,
+              lastAutoRedispatchAt: updatedAt,
+              updatedAt,
+            };
+            if (driverId) {
+              openPoolUpdate.rejectedDriverIds = admin.firestore.FieldValue.arrayUnion(driverId);
             }
+            transaction.update(rideDoc.ref, openPoolUpdate);
+            await releaseDriverLive(transaction, driverId);
+            return 'open_pool';
+          }
 
+          if (redispatchCount >= MAX_AUTO_REDISPATCH) {
             const expireUpdate: Record<string, unknown> = {
               status: 'Expirée',
               driverId: '',
@@ -787,7 +787,7 @@ export const onRideAssignmentTimeout = onSchedule(
             rideId,
             driverId,
             redispatchCount,
-            maxAttempts: MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH,
+            maxAttempts: MAX_IMMEDIATE_CITY_AUTO_ASSIGN_ATTEMPTS,
           });
           await notifyAdminsOptional({
             rideId,
