@@ -63,6 +63,7 @@ import {
 } from '@/services/driverDispatchService';
 import {
   getClientReservationStatusLabel,
+  isImmediateCityRide,
   isScheduledAirportRide,
   isScheduledCityRide,
   isScheduledManagedRide,
@@ -690,6 +691,8 @@ ridesData.forEach(async (ride: any) => {
   ) {
 
 ridesData.forEach(async (ride: any) => {
+  if (isImmediateCityRide(ride)) return;
+
   if (
     ride.status === 'Attribuée' &&
     ride.assignedAt?.toDate
@@ -741,6 +744,8 @@ ridesData.forEach(async (ride: any) => {
       (now - created) / 1000 / 60;
 
     if (diffMinutes >= 5) {
+      if (isImmediateCityRide(ride)) return;
+
       const rejectedCount = Array.isArray(ride.rejectedDriverIds)
         ? ride.rejectedDriverIds.length
         : 0;
