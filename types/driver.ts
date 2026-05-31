@@ -105,11 +105,44 @@ export function isImmediateCityRide(ride: ImmediateCityRideContext): boolean {
 
 /** Course ville immédiate en pool ouvert (En attente, sans chauffeur assigné). */
 export function isOpenPoolCityRide(
-  ride: (ImmediateCityRideContext & { status?: unknown; driverId?: unknown }) | null,
+  ride: (ImmediateCityRideContext & {
+    status?: unknown;
+    driverId?: unknown;
+    openPool?: unknown;
+  }) | null,
 ): boolean {
   if (!isImmediateCityRide(ride)) return false;
   if (normalizeRideStatus(String(ride?.status || '')) !== 'En attente') return false;
-  return !hasAssignedDriverId(ride?.driverId);
+  if (hasAssignedDriverId(ride?.driverId)) return false;
+  return ride?.openPool === true;
+}
+
+/** Demande pool ouverte visible pour un chauffeur (Taxi Ville Maintenant). */
+export function isDriverOpenPoolCityRequest(
+  ride: {
+    rideType?: unknown;
+    rideMode?: unknown;
+    status?: unknown;
+    driverId?: unknown;
+    openPool?: unknown;
+    rejectedDriverIds?: unknown;
+  } | null,
+  driverUid: string,
+): boolean {
+  const normalizedDriverUid = String(driverUid || '').trim();
+  if (!normalizedDriverUid || !ride) return false;
+
+  if (String(ride.rideType || '').trim() !== 'city') return false;
+  if (String(ride.rideMode || '').trim() !== 'Maintenant') return false;
+  if (normalizeRideStatus(String(ride.status || '')) !== 'En attente') return false;
+  if (ride.openPool !== true) return false;
+  if (hasAssignedDriverId(ride.driverId)) return false;
+
+  const rejectedDriverIds = Array.isArray(ride.rejectedDriverIds)
+    ? ride.rejectedDriverIds.map(String)
+    : [];
+
+  return !rejectedDriverIds.includes(normalizedDriverUid);
 }
 
 /** Transfert aéroport, chauffeur privé ou taxi ville planifié (même pipeline admin/chauffeur). */
