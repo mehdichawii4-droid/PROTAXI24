@@ -38,6 +38,7 @@ import {
   canClientOpenCourseTracking,
   getClientReservationStatusLabel,
   isScheduledAirportRide,
+  isScheduledCityRide,
   isScheduledPrivateDriverRide,
   shouldShowAssignedDriverToClient,
 } from '@/types/driver';
@@ -48,6 +49,9 @@ const SCHEDULED_AIRPORT_CONFIRMATION_MESSAGE =
 
 const SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE =
   'Votre demande chauffeur privé est confirmée par PROTAXI. Notre équipe vous attribuera un chauffeur partenaire avant le jour J.';
+
+const SCHEDULED_CITY_CONFIRMATION_MESSAGE =
+  'Course ville confirmée — PROTAXI vous attribuera un chauffeur partenaire avant l\'horaire de votre course.';
 
 const gold = '#D4A017';
 const red = '#FF4B4B';
@@ -259,6 +263,7 @@ const isCancelled = status === 'Annulée';
 const isFinished = status === 'Terminée';
 const isScheduledAirport = isScheduledAirportRide(item);
 const isScheduledPrivate = isScheduledPrivateDriverRide(item);
+const isScheduledCity = isScheduledCityRide(item);
 const canCancel = canClientCancelReservation(status, item);
 const canTrack = canClientOpenCourseTracking(status, item);
 const showDriverDetails = shouldShowAssignedDriverToClient(status, item) && item.driverName;
@@ -305,13 +310,15 @@ const reservationId = String(item.id || '').slice(-6);
                 </View>
               </View>
 
-              {(isScheduledAirport || isScheduledPrivate) && status === 'Confirmée' ? (
+              {(isScheduledAirport || isScheduledPrivate || isScheduledCity) && status === 'Confirmée' ? (
                 <View style={styles.scheduledBanner}>
                   <Ionicons name="shield-checkmark" size={18} color={gold} />
                   <Text style={styles.scheduledBannerText}>
                     {isScheduledPrivate
                       ? SCHEDULED_PRIVATE_DRIVER_CONFIRMATION_MESSAGE
-                      : SCHEDULED_AIRPORT_CONFIRMATION_MESSAGE}
+                      : isScheduledCity
+                        ? SCHEDULED_CITY_CONFIRMATION_MESSAGE
+                        : SCHEDULED_AIRPORT_CONFIRMATION_MESSAGE}
                   </Text>
                 </View>
               ) : null}
