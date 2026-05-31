@@ -1,6 +1,7 @@
 import * as admin from 'firebase-admin';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { logger } from 'firebase-functions/v2';
+import { shouldSkipAutoDispatchForOpenPool } from './rideScope';
 
 type DriverAvailability = 'offline' | 'available' | 'pending_accept' | 'busy';
 
@@ -507,6 +508,11 @@ export async function attemptAutoDispatchForRide(
 
   if (hasAssignedDriverId(ride.driverId)) {
     logger.info('[DISPATCH V2] skip — driver already assigned', { rideId });
+    return;
+  }
+
+  if (shouldSkipAutoDispatchForOpenPool(ride)) {
+    logger.info('[DISPATCH V2] skip — immediate city open pool', { rideId });
     return;
   }
 

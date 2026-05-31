@@ -5,6 +5,11 @@ import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { logger } from 'firebase-functions/v2';
 import { attemptAutoDispatchForRide } from './autoDispatch';
+import {
+  isImmediateCityRide,
+  MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH,
+  shouldSkipAutoDispatchForOpenPool,
+} from './rideScope';
 
 admin.initializeApp();
 
@@ -663,7 +668,7 @@ export const onRideAssignmentTimeout = onSchedule(
 
     for (const rideDoc of snapshot.docs) {
       const rideId = rideDoc.id;
-      let outcome: 'returned' | 'expired' | 'skipped' = 'skipped';
+      let outcome: 'returned' | 'expired' | 'open_pool' | 'skipped' = 'skipped';
       let redispatchCount = 0;
       let driverId = '';
 
@@ -690,6 +695,28 @@ export const onRideAssignmentTimeout = onSchedule(
           const updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
           if (redispatchCount >= MAX_AUTO_REDISPATCH) {
+            if (isImmediateCityRide(ride)) {
+              const openPoolUpdate: Record<string, unknown> = {
+                status: 'En attente',
+                driverId: '',
+                driverName: '',
+                driverPhone: '',
+                driverPhoto: '',
+                driverPlate: '',
+                driverCar: '',
+                redispatchCount,
+                openPool: true,
+                lastAutoRedispatchAt: updatedAt,
+                updatedAt,
+              };
+              if (driverId) {
+                openPoolUpdate.rejectedDriverIds = admin.firestore.FieldValue.arrayUnion(driverId);
+              }
+              transaction.update(rideDoc.ref, openPoolUpdate);
+              await releaseDriverLive(transaction, driverId);
+              return 'open_pool';
+            }
+
             const expireUpdate: Record<string, unknown> = {
               status: 'Expirée',
               driverId: '',
@@ -752,9 +779,22 @@ export const onRideAssignmentTimeout = onSchedule(
 
           const freshSnap = await db.doc(`rides/${rideId}`).get();
           const freshRide = freshSnap.data();
-          if (freshRide) {
+          if (freshRide && !shouldSkipAutoDispatchForOpenPool(freshRide)) {
             await attemptAutoDispatchForRide(db, rideId, freshRide);
           }
+        } else if (outcome === 'open_pool') {
+          logger.info('[REDISPATCH AUTO] immediate city moved to open pool', {
+            rideId,
+            driverId,
+            redispatchCount,
+            maxAttempts: MAX_IMMEDIATE_CITY_OPEN_POOL_REDISPATCH,
+          });
+          await notifyAdminsOptional({
+            rideId,
+            title: 'Course en attente chauffeur',
+            body: 'Une course ville immédiate attend qu’un chauffeur la prenne.',
+            eventType: 'taxi_ride_open_pool',
+          });
         } else if (outcome === 'expired') {
           logger.info('[REDISPATCH AUTO] ride expired after max attempts', {
             rideId,
