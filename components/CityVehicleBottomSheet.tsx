@@ -32,7 +32,6 @@ import {
   type CityVehicleDef,
   type CityVehicleId,
 } from '@/constants/cityVehicles';
-import CityRideSummaryStrip from '@/components/city/CityRideSummaryStrip';
 import type { CityLiveDriverCard } from '@/hooks/useCityLiveDrivers';
 
 export {
@@ -126,14 +125,9 @@ type Props = {
   termsAccepted: boolean;
   onToggleTerms: () => void;
   onOpenPassengers: () => void;
+  onOpenOptions: () => void;
   onOpenPayment: () => void;
   onOpenNotes: () => void;
-  departureLabel: string;
-  destinationLabel: string;
-  timingLabel: string;
-  contactName: string;
-  contactPhone: string;
-  contactComplete: boolean;
   isSubmitting: boolean;
   onCommander: () => void;
   bottomInset: number;
@@ -297,14 +291,9 @@ export default function CityVehicleBottomSheet({
   termsAccepted,
   onToggleTerms,
   onOpenPassengers,
+  onOpenOptions,
   onOpenPayment,
   onOpenNotes,
-  departureLabel,
-  destinationLabel,
-  timingLabel,
-  contactName,
-  contactPhone,
-  contactComplete,
   isSubmitting,
   onCommander,
   bottomInset,
@@ -465,21 +454,16 @@ export default function CityVehicleBottomSheet({
           style={styles.bottomBlock}
           onLayout={(event) => onBottomBlockLayout(event.nativeEvent.layout.height)}
         >
-          <CityRideSummaryStrip
-            departure={departureLabel}
-            destination={destinationLabel}
-            timingLabel={timingLabel}
-            contactName={contactName}
-            contactPhone={contactPhone}
-            contactComplete={contactComplete}
-          />
-
           <View style={styles.optionsGrid}>
             <TouchableOpacity style={styles.optionCell} onPress={onOpenPassengers} activeOpacity={0.85}>
-              <Ionicons name="people-outline" size={17} color={green} />
+              <Ionicons name="person-outline" size={17} color={green} />
               <Text style={styles.optionText} numberOfLines={1}>
                 {passengersLabel}
               </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.optionCell} onPress={onOpenOptions} activeOpacity={0.85}>
+              <Ionicons name="options-outline" size={17} color={green} />
+              <Text style={styles.optionText}>Options</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.optionCell} onPress={onOpenPayment} activeOpacity={0.85}>
               <Ionicons name="cash-outline" size={17} color={green} />
@@ -530,15 +514,10 @@ export default function CityVehicleBottomSheet({
       onBottomBlockLayout,
       onCommander,
       onOpenNotes,
+      onOpenOptions,
       onOpenPassengers,
       onOpenPayment,
       onToggleTerms,
-      departureLabel,
-      destinationLabel,
-      timingLabel,
-      contactName,
-      contactPhone,
-      contactComplete,
       passengersLabel,
       paymentLabel,
       termsAccepted,
@@ -982,8 +961,7 @@ const styles = StyleSheet.create({
     columnGap: 8,
   },
   optionCell: {
-    flex: 1,
-    minWidth: '30%',
+    width: '48%',
     minHeight: 36,
     flexDirection: 'row',
     alignItems: 'center',

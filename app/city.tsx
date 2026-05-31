@@ -6,9 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -24,7 +22,6 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import CityBookingMap from '@/components/CityBookingMap';
-import CityFlowProgressBar from '@/components/city/CityFlowProgressBar';
 import CityDriverNotesModal from '@/components/CityDriverNotesModal';
 import CityRideOptionsModal from '@/components/CityRideOptionsModal';
 import CityVehicleBottomSheet, {
@@ -198,14 +195,6 @@ export default function CityScreen() {
   const selectionBottomInset = Math.max(insets.bottom, 12);
   const showVehicleStep =
     timingConfirmed && (timingMode === 'now' || Boolean(scheduledAt));
-  const flowStep: 1 | 2 = showVehicleStep ? 2 : 1;
-  const contactComplete = Boolean(fullName.trim() && phone.trim());
-  const timingSummaryLabel =
-    timingMode === 'later' && scheduledAt
-      ? formatScheduleSummary(scheduledAt)
-      : timingMode === 'now' && timingConfirmed
-        ? 'Maintenant'
-        : 'Choisir un horaire';
   const liveDriversEnabled = showVehicleStep && !mapSelectionMode;
 
   const {
@@ -368,9 +357,9 @@ export default function CityScreen() {
     if (!fullName.trim() || !phone.trim()) {
       Alert.alert(
         'Informations manquantes',
-        'Renseignez votre nom et votre téléphone à l’étape Trajet & horaire.',
+        'Veuillez renseigner votre nom et votre téléphone.',
       );
-      closeVehicleSheet();
+      setRideOptionsVisible(true);
       return;
     }
     if (!pickup.trim()) {
@@ -542,10 +531,7 @@ export default function CityScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={styles.container}>
       <StatusBar style="light" />
 
       <View style={styles.screenBody}>
@@ -614,7 +600,7 @@ export default function CityScreen() {
                 <Text style={{ color: gold }}>VILLE</Text> 24H
               </Text>
               <Text style={styles.headerStatus} numberOfLines={1}>
-                Taxi ville · Guelma
+                Réservation live
               </Text>
             </View>
 
@@ -624,104 +610,46 @@ export default function CityScreen() {
           </View>
         ) : null}
 
-        {!mapSelectionMode && showVehicleStep ? (
-          <View style={[styles.flowBannerFloating, { top: insets.top + 58 }]}>
-            <CityFlowProgressBar step={flowStep} />
-          </View>
-        ) : null}
-
         {!mapSelectionMode && !showVehicleStep ? (
           <View style={[styles.bottomPanel, { paddingBottom: panelBottomInset }]}>
             <View style={styles.handle} />
 
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.bottomPanelScroll}
-            >
-              <CityFlowProgressBar step={flowStep} />
+            <View style={styles.routeBlock}>
+              <RouteField
+                dotColor="#4ADE80"
+                icon="radio-button-on"
+                placeholder="Point de départ"
+                value={pickup}
+                onChangeText={setPickup}
+              />
+              <View style={styles.routeDivider} />
+              <DestinationField
+                value={destinationAddress}
+                onPress={() => setDestinationModalVisible(true)}
+              />
+            </View>
 
-              <Text style={styles.panelSectionTitle}>Votre trajet</Text>
-              <View style={styles.routeBlock}>
-                <RouteField
-                  dotColor="#4ADE80"
-                  icon="radio-button-on"
-                  placeholder="Adresse de prise en charge"
-                  value={pickup}
-                  onChangeText={setPickup}
-                />
-                <View style={styles.routeDivider} />
-                <DestinationField
-                  value={destinationAddress}
-                  onPress={() => setDestinationModalVisible(true)}
-                />
-              </View>
+            <View style={styles.timingSection}>
+              <TimingSegmentedControl
+                mode={timingMode}
+                confirmed={timingConfirmed}
+                onSelectNow={handleSelectNow}
+                onSelectLater={handleSelectLater}
+              />
 
-              {!hasDestination ? (
-                <Text style={styles.panelHint}>
-                  Destination facultative — vous pouvez la préciser avec le chauffeur.
-                </Text>
+              {timingMode === 'later' && scheduledAt ? (
+                <TouchableOpacity
+                  style={styles.scheduleSummary}
+                  onPress={() => setScheduleModalVisible(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.scheduleSummaryText}>
+                    📅 {formatScheduleSummary(scheduledAt)}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={green} />
+                </TouchableOpacity>
               ) : null}
-
-              <Text style={styles.panelSectionTitle}>Quand partez-vous ?</Text>
-              <View style={styles.timingSection}>
-                <TimingSegmentedControl
-                  mode={timingMode}
-                  confirmed={timingConfirmed}
-                  onSelectNow={handleSelectNow}
-                  onSelectLater={handleSelectLater}
-                />
-
-                {timingMode === 'later' && scheduledAt ? (
-                  <TouchableOpacity
-                    style={styles.scheduleSummary}
-                    onPress={() => setScheduleModalVisible(true)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.scheduleSummaryText}>
-                      📅 {formatScheduleSummary(scheduledAt)}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={green} />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-
-              <Text style={styles.panelSectionTitle}>Vos coordonnées</Text>
-              <View style={styles.contactBlock}>
-                <RouteField
-                  dotColor={contactComplete ? green : gold}
-                  icon="person-outline"
-                  placeholder="Nom complet"
-                  value={fullName}
-                  onChangeText={setFullName}
-                />
-                <View style={styles.routeDivider} />
-                <RouteField
-                  dotColor={contactComplete ? green : gold}
-                  icon="call-outline"
-                  placeholder="Téléphone"
-                  value={phone}
-                  onChangeText={setPhone}
-                  keyboardType="phone-pad"
-                />
-              </View>
-
-              {!contactComplete ? (
-                <Text style={styles.panelHint}>
-                  Requis avant de commander — le chauffeur pourra vous joindre.
-                </Text>
-              ) : null}
-
-              {timingConfirmed ? (
-                <Text style={styles.panelNextHint}>
-                  Choix du véhicule affiché — vérifiez le récapitulatif avant de commander.
-                </Text>
-              ) : (
-                <Text style={styles.panelNextHint}>
-                  Sélectionnez Maintenant ou Plus tard pour continuer.
-                </Text>
-              )}
-            </ScrollView>
+            </View>
           </View>
         ) : null}
 
@@ -742,16 +670,11 @@ export default function CityScreen() {
             termsAccepted={termsAccepted}
             onToggleTerms={() => setTermsAccepted((prev) => !prev)}
             onOpenPassengers={() => setRideOptionsVisible(true)}
+            onOpenOptions={() => setRideOptionsVisible(true)}
             onOpenPayment={() =>
               Alert.alert('Paiement', 'Règlement à bord en espèces ou par carte bancaire.')
             }
             onOpenNotes={() => setNotesModalVisible(true)}
-            departureLabel={pickup.trim() || 'Prise en charge à confirmer'}
-            destinationLabel={finalDestination}
-            timingLabel={timingSummaryLabel}
-            contactName={fullName}
-            contactPhone={phone}
-            contactComplete={contactComplete}
             isSubmitting={isSubmitting}
             onCommander={handleCommanderPress}
             bottomInset={panelBottomInset}
@@ -785,6 +708,10 @@ export default function CityScreen() {
         setBags={setBags}
         waitingTime={waitingTime}
         setWaitingTime={setWaitingTime}
+        fullName={fullName}
+        setFullName={setFullName}
+        phone={phone}
+        setPhone={setPhone}
       />
 
       <CityDriverNotesModal
@@ -793,7 +720,7 @@ export default function CityScreen() {
         onChangeNotes={setNotes}
         onClose={() => setNotesModalVisible(false)}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -857,7 +784,7 @@ function DestinationField({ value, onPress }: { value: string; onPress: () => vo
         style={[styles.destinationText, !value && styles.routePlaceholder]}
         numberOfLines={1}
       >
-        {value || 'Choisir une destination (facultatif)'}
+        {value || 'Destination / Estimation (facultatif)'}
       </Text>
       <Ionicons name="search" size={18} color={green} />
     </TouchableOpacity>
@@ -1001,7 +928,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 28,
     paddingHorizontal: 16,
     paddingTop: 6,
-    maxHeight: '52%',
     borderTopWidth: 1,
     borderColor: 'rgba(212,160,23,0.18)',
     overflow: 'hidden',
@@ -1022,44 +948,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#333',
     alignSelf: 'center',
     marginBottom: 8,
-  },
-  bottomPanelScroll: {
-    paddingBottom: 8,
-    gap: 4,
-  },
-  flowBannerFloating: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    zIndex: 12,
-  },
-  panelSectionTitle: {
-    color: '#AAA',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-    marginTop: 8,
-    marginBottom: 6,
-  },
-  panelHint: {
-    color: '#777',
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  panelNextHint: {
-    color: 'rgba(74,222,128,0.85)',
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '700',
-    marginTop: 10,
-    marginBottom: 4,
-  },
-  contactBlock: {
-    width: '100%',
-    gap: 0,
   },
   routeBlock: {
     width: '100%',
