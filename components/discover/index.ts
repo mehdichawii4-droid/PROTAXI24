@@ -9,3 +9,8 @@ export { default as DiscoverRecommendationsList } from '@/components/discover/Di
 export { default as DiscoverSectionHeader } from '@/components/discover/DiscoverSectionHeader';
 export { default as DiscoverTrendsHighlightCard } from '@/components/discover/DiscoverTrendsHighlight';
 export { default as DiscoverWhyProtaxi } from '@/components/discover/DiscoverWhyProtaxi';
+export { default as ExplorerActivitesTab } from '@/components/discover/ExplorerActivitesTab';
+export { default as ExplorerExperiencesTab } from '@/components/discover/ExplorerExperiencesTab';
+export { default as ExplorerGuidesTab } from '@/components/discover/ExplorerGuidesTab';
+export { default as ExplorerHebergementsTab } from '@/components/discover/ExplorerHebergementsTab';
+export { default as ExplorerTabBar, type ExplorerTabId } from '@/components/discover/ExplorerTabBar';

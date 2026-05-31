@@ -2,32 +2,23 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
-import {
-  Animated,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  DiscoverFeaturedCarousel,
-  DiscoverGuideTeaserCard,
-  DiscoverHero,
-  DiscoverHotelTeasers,
-  DiscoverPhotographerTeaserCard,
-  DiscoverPopularRow,
-  DiscoverRecommendationsList,
-  DiscoverTrendsHighlightCard,
-  DiscoverWhyProtaxi,
+  ExplorerActivitesTab,
+  ExplorerExperiencesTab,
+  ExplorerGuidesTab,
+  ExplorerHebergementsTab,
+  ExplorerTabBar,
+  type ExplorerTabId,
 } from '@/components/discover';
 import {
   DISCOVER_BG,
   DISCOVER_CARD,
   DISCOVER_GREEN,
+  DISCOVER_MUTED,
 } from '@/components/discover/discoverTheme';
 import { DISCOVER_NAV_SOURCE } from '@/constants/discoverCatalogV2';
 import type { ExperienceOptionId } from '@/constants/experiencesPrivateCatalog';
@@ -35,63 +26,15 @@ import {
   getDiscoverFeaturedExperiences,
   getDiscoverGuideTeaser,
   getDiscoverHotelTeasers,
-  getDiscoverPhotographerTeaser,
-  getDiscoverPopularExperiences,
-  getDiscoverRecommendations,
-  getDiscoverTrendsHighlight,
 } from '@/services/discoverCatalogService';
-import {
-  navigateToExperiencesPrivate,
-  navigateToHotelFromDiscover,
-  navigateTo,
-  PROTAXI_ROUTES,
-} from '@/utils/navigation';
-
-function FadeSlideIn({
-  children,
-  delay = 0,
-  style,
-}: {
-  children: ReactNode;
-  delay?: number;
-  style?: object;
-}) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(12)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacity, {
-        toValue: 1,
-        duration: 520,
-        delay,
-        useNativeDriver: true,
-      }),
-      Animated.spring(translateY, {
-        toValue: 0,
-        delay,
-        tension: 80,
-        friction: 12,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [delay, opacity, translateY]);
-
-  return (
-    <Animated.View style={[{ opacity, transform: [{ translateY }] }, style]}>
-      {children}
-    </Animated.View>
-  );
-}
+import { navigateToExperiencesPrivate, navigateToHotelFromDiscover } from '@/utils/navigation';
 
 export default function DiscoverGuelmaScreen() {
+  const [activeTab, setActiveTab] = useState<ExplorerTabId>('experiences');
+
   const featured = useMemo(() => getDiscoverFeaturedExperiences(), []);
-  const popular = useMemo(() => getDiscoverPopularExperiences(), []);
-  const recommendations = useMemo(() => getDiscoverRecommendations(), []);
-  const trendsHighlight = useMemo(() => getDiscoverTrendsHighlight(), []);
   const hotelTeasers = useMemo(() => getDiscoverHotelTeasers(), []);
   const guideTeaser = useMemo(() => getDiscoverGuideTeaser(), []);
-  const photographerTeaser = useMemo(() => getDiscoverPhotographerTeaser(), []);
 
   const discoverSource = (suffix?: string) =>
     suffix ? `${DISCOVER_NAV_SOURCE}-${suffix}` : DISCOVER_NAV_SOURCE;
@@ -114,13 +57,6 @@ export default function DiscoverGuelmaScreen() {
     );
   };
 
-  const bookCityTaxi = () => {
-    navigateTo(
-      { pathname: PROTAXI_ROUTES.city, params: { source: DISCOVER_NAV_SOURCE } },
-      { source: DISCOVER_NAV_SOURCE, label: 'Besoin d\'un taxi en ville ?' },
-    );
-  };
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="light" />
@@ -134,129 +70,68 @@ export default function DiscoverGuelmaScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scroll}
       >
-        <FadeSlideIn>
-          <View style={styles.topBar}>
-            <TouchableOpacity style={styles.iconBtn} onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={22} color="#FFF" />
-            </TouchableOpacity>
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={22} color="#FFF" />
+          </TouchableOpacity>
 
-            <View style={styles.topBarCenter}>
-              <MaterialCommunityIcons name="compass-outline" size={16} color={DISCOVER_GREEN} />
-              <Text style={styles.topBarTitle}>EXPLORER · GUELMA</Text>
-            </View>
-
-            <View style={styles.iconBtnPlaceholder} />
+          <View style={styles.topBarCenter}>
+            <MaterialCommunityIcons name="compass-outline" size={16} color={DISCOVER_GREEN} />
+            <Text style={styles.topBarTitle}>EXPLORER · GUELMA</Text>
           </View>
-        </FadeSlideIn>
 
-        <FadeSlideIn delay={60}>
-          <DiscoverHero
-            onPressCta={() =>
-              openExperiencesPrivate('Voir les expériences privées', { sourceSuffix: 'hero' })
-            }
-          />
-        </FadeSlideIn>
+          <View style={styles.iconBtnPlaceholder} />
+        </View>
 
-        <FadeSlideIn delay={100}>
-          <DiscoverFeaturedCarousel
+        <Text style={styles.hubIntro}>
+          Tourisme officiel PROTAXI — choisissez une rubrique pour continuer.
+        </Text>
+
+        <ExplorerTabBar activeTab={activeTab} onSelectTab={setActiveTab} />
+
+        {activeTab === 'experiences' ? (
+          <ExplorerExperiencesTab
             items={featured}
             onSelectExperience={(experienceId) =>
               openExperiencesPrivate(`Expérience ${experienceId}`, {
                 experienceId,
-                sourceSuffix: 'featured',
+                sourceSuffix: 'experiences',
+              })
+            }
+            onBrowseAll={() =>
+              openExperiencesPrivate('Parcourir les expériences', {
+                sourceSuffix: 'experiences-browse',
               })
             }
           />
-        </FadeSlideIn>
+        ) : null}
 
-        <FadeSlideIn delay={120}>
-          <DiscoverPopularRow
-            items={popular}
-            onSelectExperience={(experienceId) =>
-              openExperiencesPrivate(`Circuit ${experienceId}`, {
-                experienceId,
-                sourceSuffix: 'popular',
+        {activeTab === 'activites' ? <ExplorerActivitesTab /> : null}
+
+        {activeTab === 'guides' ? (
+          <ExplorerGuidesTab
+            teaser={guideTeaser}
+            onPressReserve={() =>
+              openExperiencesPrivate('Réserver avec un guide', {
+                experienceId: guideTeaser.highlightExperienceId,
+                sourceSuffix: 'guides',
+                preselectOption: 'guide',
               })
             }
           />
-        </FadeSlideIn>
+        ) : null}
 
-        <FadeSlideIn delay={150}>
-          <DiscoverRecommendationsList
-            items={recommendations}
-            onSelectExperience={(experienceId) =>
-              openExperiencesPrivate(`Recommandation ${experienceId}`, {
-                experienceId,
-                sourceSuffix: 'recommended',
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={180}>
-          <DiscoverTrendsHighlightCard
-            highlight={trendsHighlight}
-            onPress={() =>
-              openExperiencesPrivate(`Tendance ${trendsHighlight.experienceId}`, {
-                experienceId: trendsHighlight.experienceId,
-                sourceSuffix: 'trends',
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={210}>
-          <DiscoverHotelTeasers
+        {activeTab === 'hebergements' ? (
+          <ExplorerHebergementsTab
             items={hotelTeasers}
-            onPressTeaser={() =>
+            onPressTransfer={() =>
               navigateToHotelFromDiscover(
-                { source: DISCOVER_NAV_SOURCE, label: 'Transfert hôtel premium' },
-                DISCOVER_NAV_SOURCE,
+                { source: DISCOVER_NAV_SOURCE, label: 'Transfert hôtel' },
+                discoverSource('hebergements'),
               )
             }
           />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={270}>
-          <DiscoverGuideTeaserCard
-            teaser={guideTeaser}
-            onPress={() =>
-              openExperiencesPrivate('Guides certifiés PROTAXI', {
-                experienceId: guideTeaser.highlightExperienceId,
-                sourceSuffix: 'guide-teaser',
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={330}>
-          <DiscoverPhotographerTeaserCard
-            teaser={photographerTeaser}
-            onPress={() =>
-              openExperiencesPrivate('Option photographe', {
-                experienceId: photographerTeaser.targetExperienceId,
-                sourceSuffix: 'photographer-teaser',
-                preselectOption: photographerTeaser.preselectOption,
-              })
-            }
-          />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={390}>
-          <DiscoverWhyProtaxi />
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={450}>
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            activeOpacity={0.9}
-            onPress={bookCityTaxi}
-          >
-            <Ionicons name="car-sport-outline" size={18} color={DISCOVER_GREEN} />
-            <Text style={styles.secondaryBtnText}>Besoin d&apos;un taxi en ville ?</Text>
-            <Ionicons name="chevron-forward" size={16} color={DISCOVER_GREEN} />
-          </TouchableOpacity>
-        </FadeSlideIn>
+        ) : null}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
@@ -285,7 +160,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 12,
     paddingTop: 4,
   },
   iconBtn: {
@@ -313,24 +188,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 1,
   },
-  secondaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(139,197,63,0.28)',
-    backgroundColor: 'rgba(139,197,63,0.06)',
-  },
-  secondaryBtnText: {
-    color: DISCOVER_GREEN,
+  hubIntro: {
+    color: DISCOVER_MUTED,
     fontSize: 13,
-    fontWeight: '800',
-    flex: 1,
-    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 16,
+    fontWeight: '500',
   },
   bottomSpacer: {
     height: 12,
