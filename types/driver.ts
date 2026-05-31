@@ -71,11 +71,25 @@ export function isScheduledPrivateDriverRide(
   );
 }
 
-/** Transfert aéroport planifié ou chauffeur privé planifié (même pipeline admin/chauffeur). */
+export function isScheduledCityRide(
+  ride: { rideType?: unknown; rideMode?: unknown } | null | undefined,
+): boolean {
+  if (!ride) return false;
+  return (
+    String(ride.rideType || '') === 'city'
+    && String(ride.rideMode || '') === SCHEDULED_AIRPORT_RIDE_MODE
+  );
+}
+
+/** Transfert aéroport, chauffeur privé ou taxi ville planifié (même pipeline admin/chauffeur). */
 export function isScheduledManagedRide(
   ride: { rideType?: unknown; rideMode?: unknown } | null | undefined,
 ): boolean {
-  return isScheduledAirportRide(ride) || isScheduledPrivateDriverRide(ride);
+  return (
+    isScheduledAirportRide(ride)
+    || isScheduledPrivateDriverRide(ride)
+    || isScheduledCityRide(ride)
+  );
 }
 
 export function getClientReservationStatusLabel(
@@ -88,6 +102,21 @@ export function getClientReservationStatusLabel(
     switch (normalized) {
       case 'Confirmée':
         return 'Demande confirmée';
+      case 'À attribuer':
+        return 'Préparation en cours';
+      case 'En attente confirmation chauffeur':
+        return 'Chauffeur proposé';
+      case 'Chauffeur confirmé':
+        return 'Chauffeur confirmé';
+      default:
+        return normalized;
+    }
+  }
+
+  if (isScheduledCityRide(ride)) {
+    switch (normalized) {
+      case 'Confirmée':
+        return 'Course confirmée';
       case 'À attribuer':
         return 'Préparation en cours';
       case 'En attente confirmation chauffeur':
