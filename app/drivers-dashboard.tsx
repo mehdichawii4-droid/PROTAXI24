@@ -96,6 +96,7 @@ import {
   isScheduledAirportRide,
   isScheduledCityRide,
   isImmediateCityRide,
+  isDriverOpenPoolCityRequest,
   isScheduledManagedRide,
   isScheduledPrivateDriverRide,
 } from '@/types/driver';
@@ -403,6 +404,26 @@ const formatHistoryDate = (ride: any) => {
   const date = getRideDate(ride);
   return date ? date.toLocaleString('fr-FR') : '—';
 };
+
+function formatOpenPoolWaitLabel(ride: any): string {
+  const waitMinutes = Math.max(0, Math.floor(getRideWaitMinutes(ride)));
+  if (waitMinutes <= 0) return "À l'instant";
+  if (waitMinutes === 1) return 'En attente · 1 min';
+  return `En attente · ${waitMinutes} min`;
+}
+
+function formatOpenPoolRequestMeta(ride: any): string {
+  const waitLabel = formatOpenPoolWaitLabel(ride);
+  const created = getRideDate(ride);
+  if (!created) return waitLabel;
+
+  const time = created.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return `${waitLabel} · ${time}`;
+}
 
 const RIDE_TIMELINE_STEPS = [
   'Attribuée',
@@ -1412,10 +1433,29 @@ export default function DriversDashboardScreen() {
     []
   );
 
+  const openPoolRequestRides = useMemo(() => {
+    if (!driverUid) return [];
+
+    return rides
+      .filter((ride) => isDriverOpenPoolCityRequest(ride, driverUid))
+      .sort((left, right) => {
+        const leftCreated = getRideDate(left)?.getTime() ?? 0;
+        const rightCreated = getRideDate(right)?.getTime() ?? 0;
+        return leftCreated - rightCreated;
+      });
+  }, [rides, driverUid]);
+
+  const openPoolRequestRideIds = useMemo(
+    () => new Set(openPoolRequestRides.map((ride) => ride.id)),
+    [openPoolRequestRides],
+  );
+
   const filteredRides = useMemo(() => {
-    if (filter === 'Toutes') return rides;
-    return rides.filter((ride) => normalizeStatus(ride.status) === filter);
-  }, [filter, rides]);
+    const withoutOpenPool = rides.filter((ride) => !openPoolRequestRideIds.has(ride.id));
+
+    if (filter === 'Toutes') return withoutOpenPool;
+    return withoutOpenPool.filter((ride) => normalizeStatus(ride.status) === filter);
+  }, [filter, rides, openPoolRequestRideIds]);
 
   const activeRide = useMemo(
     () =>
@@ -2268,6 +2308,55 @@ export default function DriversDashboardScreen() {
                 </Text>
               </TouchableOpacity>
             )
+          )}
+        </View>
+
+        <View style={styles.openPoolSection}>
+          <View style={styles.openPoolSectionHeader}>
+            <Text style={styles.openPoolSectionTitle}>Demandes en attente</Text>
+            {openPoolRequestRides.length > 0 ? (
+              <View style={styles.openPoolCountBadge}>
+                <Text style={styles.openPoolCountBadgeText}>{openPoolRequestRides.length}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {openPoolRequestRides.length === 0 ? (
+            <View style={styles.openPoolEmptyBox}>
+              <Text style={styles.openPoolEmptyText}>
+                Aucune demande ville en attente pour le moment.
+              </Text>
+            </View>
+          ) : (
+            openPoolRequestRides.map((ride) => (
+              <View key={ride.id} style={styles.openPoolCard}>
+                <View style={styles.openPoolCardTop}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.openPoolPrice}>{ride.price || 'Prix à confirmer'}</Text>
+                    <Text style={styles.openPoolMeta}>{formatOpenPoolRequestMeta(ride)}</Text>
+                  </View>
+                  <View style={styles.openPoolBadge}>
+                    <Text style={styles.openPoolBadgeText}>Ville</Text>
+                  </View>
+                </View>
+
+                <View style={styles.routeBox}>
+                  <RouteLine />
+                  <View style={{ flex: 1 }}>
+                    <RouteItem title="Départ" value={ride.departure || ride.address || 'À confirmer'} />
+                    <RouteItem title="Destination" value={ride.destination || 'À confirmer'} />
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.openPoolAcceptBtn}
+                  activeOpacity={0.9}
+                  onPress={() => updateRideStatus(ride.id, 'Acceptée')}
+                >
+                  <Text style={styles.acceptText}>PRENDRE LA COURSE</Text>
+                </TouchableOpacity>
+              </View>
+            ))
           )}
         </View>
 
@@ -4310,6 +4399,108 @@ const styles = StyleSheet.create({
   },
   activeNavText: { color: '#000', fontSize: 16, fontWeight: '900', marginLeft: 10 },
   sectionTitle: { color: '#FFF', fontSize: 20, fontWeight: '900', marginBottom: 12 },
+
+  openPoolSection: {
+    marginBottom: 18,
+    gap: 10,
+  },
+
+  openPoolSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+
+  openPoolSectionTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+
+  openPoolCountBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(139,197,63,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.35)',
+  },
+
+  openPoolCountBadgeText: {
+    color: brandGreen,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  openPoolEmptyBox: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: border,
+    backgroundColor: card,
+    padding: 14,
+  },
+
+  openPoolEmptyText: {
+    color: cockpitMuted,
+    fontSize: 13,
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+
+  openPoolCard: {
+    backgroundColor: card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.22)',
+    padding: 14,
+    gap: 12,
+  },
+
+  openPoolCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+
+  openPoolPrice: {
+    color: gold,
+    fontSize: 22,
+    fontWeight: '900',
+  },
+
+  openPoolMeta: {
+    color: cockpitMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+
+  openPoolBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(139,197,63,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,197,63,0.28)',
+  },
+
+  openPoolBadgeText: {
+    color: brandGreen,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+
+  openPoolAcceptBtn: {
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: brandGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   emptyBox: {
     borderRadius: 24,
     backgroundColor: card,
