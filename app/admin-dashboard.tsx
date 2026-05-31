@@ -64,6 +64,7 @@ import {
 import {
   getClientReservationStatusLabel,
   isScheduledAirportRide,
+  isScheduledCityRide,
   isScheduledManagedRide,
   isScheduledPrivateDriverRide,
   normalizeRideStatus,
@@ -1339,6 +1340,25 @@ useEffect(() => {
     [adminRequests]
   );
 
+  const scheduledCityPriorityRides = useMemo(
+    () =>
+      adminRequests
+        .filter((ride) => {
+          if (!isScheduledCityRide(ride)) return false;
+          return SCHEDULED_AIRPORT_ADMIN_STATUSES.has(normalizeRideStatus(ride.status));
+        })
+        .sort((a, b) => {
+          const priorityA = STATUS_PRIORITY[normalizeRideStatus(a.status)] ?? 99;
+          const priorityB = STATUS_PRIORITY[normalizeRideStatus(b.status)] ?? 99;
+          if (priorityA !== priorityB) return priorityA - priorityB;
+
+          const dateA = getRideDate(a)?.getTime() ?? 0;
+          const dateB = getRideDate(b)?.getTime() ?? 0;
+          return dateB - dateA;
+        }),
+    [adminRequests]
+  );
+
   const scheduledPrivateDriverPriorityRides = useMemo(
     () =>
       adminRequests
@@ -1530,6 +1550,7 @@ useEffect(() => {
     }
 
     const isPrivate = isScheduledPrivateDriverRide(ride);
+    const isCity = isScheduledCityRide(ride);
 
     try {
       await updateDoc(doc(db, 'rides', ride.id), {
@@ -1538,7 +1559,7 @@ useEffect(() => {
       });
 
       await persistAdminInbox(
-        isPrivate ? 'Chauffeur privé' : 'Transfert aéroport',
+        isPrivate ? 'Chauffeur privé' : isCity ? 'Taxi planifié' : 'Transfert aéroport',
         'Une réservation planifiée est prête pour attribution chauffeur.',
       );
 
@@ -1546,7 +1567,9 @@ useEffect(() => {
         'Prêt pour attribution',
         isPrivate
           ? 'La mission chauffeur privé est maintenant à attribuer.'
-          : 'Le transfert est maintenant à attribuer.',
+          : isCity
+            ? 'La course taxi ville planifiée est maintenant à attribuer.'
+            : 'Le transfert est maintenant à attribuer.',
       );
     } catch (error) {
       devError('[SCHEDULED MANAGED] promote to assignable failed', error);
@@ -2073,6 +2096,41 @@ useEffect(() => {
             scheduledAirportPriorityRides.map((ride) => (
               <ScheduledAirportAdminCard
                 key={`scheduled-airport-${ride.id}`}
+                ride={ride}
+                onPromoteToAssignable={promoteScheduledManagedToAssignable}
+                onAssignNearest={assignNearestDriver}
+              />
+            ))
+          )}
+        </View>
+
+        <View style={styles.scheduledAirportSection}>
+          <View style={styles.scheduledAirportHeader}>
+            <MaterialCommunityIcons name="taxi" size={26} color={gold} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.scheduledAirportTitle}>Taxi planifié</Text>
+              <Text style={styles.scheduledAirportSubtitle}>
+                Courses ville différées • Attribution chauffeur
+              </Text>
+            </View>
+            <View style={styles.scheduledAirportCountBadge}>
+              <Text style={styles.scheduledAirportCountBadgeText}>
+                {scheduledCityPriorityRides.length}
+              </Text>
+            </View>
+          </View>
+
+          {scheduledCityPriorityRides.length === 0 ? (
+            <View style={styles.scheduledAirportEmpty}>
+              <MaterialCommunityIcons name="calendar-clock" size={28} color={gold} />
+              <Text style={styles.scheduledAirportEmptyText}>
+                Aucune course taxi ville planifiée en cours.
+              </Text>
+            </View>
+          ) : (
+            scheduledCityPriorityRides.map((ride) => (
+              <ScheduledCityAdminCard
+                key={`scheduled-city-${ride.id}`}
                 ride={ride}
                 onPromoteToAssignable={promoteScheduledManagedToAssignable}
                 onAssignNearest={assignNearestDriver}
@@ -4860,6 +4918,97 @@ function BusinessCard({ icon, color, value, label }: any) {
       <Ionicons name={icon} size={28} color={color} />
       <Text style={styles.businessStatValue}>{value}</Text>
       <Text style={styles.businessStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function ScheduledCityAdminCard({
+  ride,
+  onPromoteToAssignable,
+  onAssignNearest,
+}: {
+  ride: any;
+  onPromoteToAssignable: (ride: any) => void;
+  onAssignNearest: (ride: any) => void;
+}) {
+  const status = normalizeRideStatus(ride.status);
+  const statusStyle = getScheduledAirportAdminStatusStyle(status);
+  const premiumLabel = getClientReservationStatusLabel(status, ride);
+  const showDriverAssignmentBadge =
+    status === 'En attente confirmation chauffeur'
+    || status === 'Chauffeur confirmé';
+
+  return (
+    <View style={styles.scheduledAirportCard}>
+      <View style={styles.priorityRideTop}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.priorityRideClient}>{ride.client || 'Client'}</Text>
+          <Text style={styles.priorityRideRoute} numberOfLines={2}>
+            {ride.departure || '—'} → {ride.destination || '—'}
+          </Text>
+        </View>
+        <Text style={styles.priorityRidePrice}>{ride.price || '—'}</Text>
+      </View>
+
+      <View style={styles.scheduledAirportBadgesRow}>
+        <View style={[styles.scheduledAirportStatusBadge, { backgroundColor: statusStyle.bg }]}>
+          <Text style={[styles.scheduledAirportStatusBadgeText, { color: statusStyle.color }]}>
+            {premiumLabel}
+          </Text>
+        </View>
+        <View style={styles.scheduledAirportPremiumBadge}>
+          <Text style={styles.scheduledAirportPremiumBadgeText}>TAXI VILLE</Text>
+        </View>
+        {showDriverAssignmentBadge ? (
+          <View
+            style={[
+              styles.scheduledAirportDriverBadge,
+              status === 'Chauffeur confirmé'
+                ? styles.scheduledAirportDriverBadgeConfirmed
+                : styles.scheduledAirportDriverBadgeProposed,
+            ]}
+          >
+            <Text style={styles.scheduledAirportDriverBadgeText}>
+              {status === 'Chauffeur confirmé' ? 'Chauffeur confirmé' : 'Chauffeur proposé'}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
+      <InfoRow icon="calendar-outline" label="Date / heure" value={formatScheduledAirportDateTime(ride)} />
+      {String(ride.vehicleType || '').trim() ? (
+        <InfoRow icon="car-sport-outline" label="Véhicule" value={String(ride.vehicleType).trim()} />
+      ) : null}
+      <InfoRow icon="people-outline" label="Passagers" value={String(ride.passengers || '1')} />
+      {String(ride.notes || '').trim() && String(ride.notes).trim() !== 'Aucune note' ? (
+        <InfoRow icon="chatbubble-outline" label="Note" value={String(ride.notes).trim()} />
+      ) : null}
+      <InfoRow icon="call-outline" label="Téléphone" value={ride.phone} />
+      {ride.driverName ? (
+        <InfoRow icon="person-outline" label="Chauffeur" value={ride.driverName} />
+      ) : null}
+
+      <View style={styles.scheduledAirportActionsRow}>
+        {status === 'Confirmée' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onPromoteToAssignable(ride)}
+          >
+            <MaterialCommunityIcons name="calendar-clock" size={22} color="#111" />
+            <Text style={styles.assignText}>Passer à attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        {status === 'À attribuer' ? (
+          <TouchableOpacity
+            style={styles.assignBtn}
+            onPress={() => onAssignNearest(ride)}
+          >
+            <MaterialCommunityIcons name="account-tie" size={22} color="#111" />
+            <Text style={styles.assignText}>Attribuer</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
     </View>
   );
 }
