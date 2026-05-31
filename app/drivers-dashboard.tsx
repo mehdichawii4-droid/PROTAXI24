@@ -95,6 +95,7 @@ import {
   canDriverStartScheduledAirportTransfer,
   isScheduledAirportRide,
   isScheduledCityRide,
+  isImmediateCityRide,
   isScheduledManagedRide,
   isScheduledPrivateDriverRide,
 } from '@/types/driver';
@@ -1740,6 +1741,7 @@ export default function DriversDashboardScreen() {
       } else if (finalStatus === 'Refusée') {
         const refusedRide = rides.find((ride) => ride.id === rideId);
         const scheduledManaged = isScheduledManagedRide(refusedRide);
+        const immediateCityRefuse = isImmediateCityRide(refusedRide);
         const refusePayload = {
           status: scheduledManaged ? 'À attribuer' : 'En attente',
           driverId: '',
@@ -1749,6 +1751,7 @@ export default function DriversDashboardScreen() {
           driverPlate: '',
           driverCar: '',
           rejectedDriverIds: arrayUnion(driverUid),
+          ...(immediateCityRefuse ? { openPool: true } : {}),
           updatedAt: serverTimestamp(),
         };
 
