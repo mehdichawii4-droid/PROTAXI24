@@ -351,8 +351,8 @@ function mapRideSnapshotDocs(snapshot: { docs: Array<{ id: string; data: () => R
   return snapshot.docs.map((docSnap) => {
     const data = docSnap.data() as Record<string, unknown>;
     return {
-      id: docSnap.id,
       ...data,
+      id: docSnap.id,
       status: normalizeStatus(String(data.status || '')),
     };
   });
@@ -1445,17 +1445,14 @@ export default function DriversDashboardScreen() {
       });
   }, [rides, driverUid]);
 
-  const openPoolRequestRideIds = useMemo(
-    () => new Set(openPoolRequestRides.map((ride) => ride.id)),
-    [openPoolRequestRides],
-  );
-
   const filteredRides = useMemo(() => {
-    const withoutOpenPool = rides.filter((ride) => !openPoolRequestRideIds.has(ride.id));
+    const withoutOpenPool = rides.filter(
+      (ride) => !driverUid || !isDriverOpenPoolCityRequest(ride, driverUid),
+    );
 
     if (filter === 'Toutes') return withoutOpenPool;
     return withoutOpenPool.filter((ride) => normalizeStatus(ride.status) === filter);
-  }, [filter, rides, openPoolRequestRideIds]);
+  }, [filter, rides, driverUid]);
 
   const activeRide = useMemo(
     () =>
