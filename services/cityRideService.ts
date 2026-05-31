@@ -211,6 +211,7 @@ export async function submitCityRide(
       client: clientName,
       phone: String(input.phone || context.profilePhone || 'Non renseigné'),
       service: String(input.service || 'Ville 24H'),
+      rideType: 'city',
       departure,
       destination,
       address: departure,
