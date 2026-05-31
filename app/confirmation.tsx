@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -7,12 +7,22 @@ import { getFirebaseAuth } from '@/firebase/authInstance';
 import { useAuth } from '@/hooks/useAuth';
 import { db } from '../firebaseConfig';
 import {
+  buildConfirmationWhatsAppMessage,
+  formatConfirmationPriceDisplay,
+  isConfirmationRoundTrip,
+  resolveConfirmationAirportModeLabel,
   resolveConfirmationContact,
   resolveConfirmationLocations,
+  resolveConfirmationServiceLabel,
+  resolveConfirmationTripTypeLabel,
+  shouldShowConfirmationAirportType,
+  shouldShowConfirmationNotes,
+  shouldShowConfirmationRideMode,
+  shouldShowConfirmationTripType,
+  normalizeConfirmationParam,
 } from '@/services/confirmationRidePayload';
 import { pickPartnerFieldsFromParams } from '@/services/partnerService';
 import { buildRidePaymentCreateFields } from '@/services/ridePayment';
-
 
 import {
   Alert,
@@ -25,124 +35,125 @@ import {
   View,
 } from 'react-native';
 
-const gold = '#D4A017';
+const green = '#8BC53F';
 const phoneNumber = '+213671421448';
 
 export default function ConfirmationScreen() {
   const { profile } = useAuth();
   const params = useLocalSearchParams();
+  const paramRecord = params as Record<string, string | string[] | undefined>;
   const {
     service,
     mode,
-    airport,
-    address,
     date,
     time,
     passengers,
     bags,
     tripType,
     price,
+    rideMode,
+    notes,
   } = params;
-  const partnerFields = pickPartnerFieldsFromParams(
-    params as Record<string, string | string[] | undefined>,
-  );
-  const { departure, destination } = resolveConfirmationLocations(
-    params as Record<string, string | string[] | undefined>,
-  );
+
+  const partnerFields = pickPartnerFieldsFromParams(paramRecord);
+  const { departure, destination } = resolveConfirmationLocations(paramRecord);
+  const { clientName, clientPhone } = resolveConfirmationContact(paramRecord, profile);
+
+  const serviceLabel = resolveConfirmationServiceLabel(service);
+  const displayParams = { service, mode, tripType, rideMode, notes };
+  const showAirportType = shouldShowConfirmationAirportType(displayParams);
+  const showTripType = shouldShowConfirmationTripType(displayParams);
+  const showRideMode = shouldShowConfirmationRideMode(displayParams);
+  const showNotes = shouldShowConfirmationNotes(displayParams);
+  const airportModeLabel = resolveConfirmationAirportModeLabel(mode);
+  const tripTypeLabel = resolveConfirmationTripTypeLabel(tripType);
+  const rideModeLabel = normalizeConfirmationParam(rideMode);
+  const notesLabel = normalizeConfirmationParam(notes);
 
   const numericPrice = Number(price || 0);
-
-  const isRoundTrip =
-    tripType === 'aller-retour' ||
-    tripType === 'retour' ||
-    tripType === 'round-trip';
-
+  const isRoundTrip = isConfirmationRoundTrip(tripType);
   const finalPrice = isRoundTrip
     ? Math.round(numericPrice - numericPrice * 0.05)
     : numericPrice;
+  const priceDisplay = formatConfirmationPriceDisplay(price, finalPrice);
 
- const confirmFinal = async () => {
-  const clientUid = getFirebaseAuth().currentUser?.uid;
-  if (!clientUid) {
-    Alert.alert(
-      'Connexion requise',
-      'Connectez-vous pour confirmer votre réservation taxi PROTAXI.',
-    );
-    return;
-  }
+  const confirmFinal = async () => {
+    const clientUid = getFirebaseAuth().currentUser?.uid;
+    if (!clientUid) {
+      Alert.alert(
+        'Connexion requise',
+        'Connectez-vous pour confirmer votre réservation taxi PROTAXI.',
+      );
+      return;
+    }
 
-  const { clientName, clientPhone } = resolveConfirmationContact(
-    params as Record<string, string | string[] | undefined>,
-    profile,
-  );
+    const contact = resolveConfirmationContact(paramRecord, profile);
 
-  try {
-    const priceLabel = `${finalPrice} DA`;
+    try {
+      const priceLabel = `${finalPrice} DA`;
 
-    const rideDoc = await addDoc(collection(db, 'rides'), {
-      clientUid,
-      clientName,
-      client: clientName,
-      phone: clientPhone,
-      service: String(service || 'Transfert aéroport'),
-      departure,
-      destination,
-      airport: destination,
-      address: departure,
-      date: String(date || ''),
-      price: priceLabel,
-      time: String(time || '—'),
-      passengers: String(passengers || '1'),
-      bags: String(bags || '0'),
-      status: 'En attente',
-      driverName: '',
-      driverPhone: '',
-      driverCar: '',
-      driverId: '',
-      createdAt: new Date(),
-      ...buildRidePaymentCreateFields({ price: priceLabel }),
-      ...partnerFields,
-    });
+      const rideDoc = await addDoc(collection(db, 'rides'), {
+        clientUid,
+        clientName: contact.clientName,
+        client: contact.clientName,
+        phone: contact.clientPhone,
+        service: String(service || 'Transfert aéroport'),
+        departure,
+        destination,
+        airport: destination,
+        address: departure,
+        date: String(date || ''),
+        price: priceLabel,
+        time: String(time || '—'),
+        passengers: String(passengers || '1'),
+        bags: String(bags || '0'),
+        status: 'En attente',
+        driverName: '',
+        driverPhone: '',
+        driverCar: '',
+        driverId: '',
+        createdAt: new Date(),
+        ...buildRidePaymentCreateFields({ price: priceLabel }),
+        ...partnerFields,
+      });
 
-    await Haptics.notificationAsync(
-      Haptics.NotificationFeedbackType.Success
-    );
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    Alert.alert(
-      'Demande envoyée',
-      'Votre demande a été envoyée. Vous pouvez suivre votre course en direct.',
-      [
-        {
-          text: 'Suivre la course',
-          onPress: () =>
-            router.push({
-              pathname: '/course-tracking',
-              params: {
-                id: rideDoc.id,
-                rideId: rideDoc.id,
-                address: departure,
-                airport: destination,
-                departure,
-                destination,
-                time: String(time || ''),
-                price: String(finalPrice || '0'),
-                status: 'En attente',
-              },
-            }),
-        },
-        {
-          text: 'Mes réservations',
-          onPress: () => router.push('/reservation'),
-        },
-      ]
-    );
-  } catch (error) {
-    Alert.alert(
-      'Erreur',
-      'Impossible d’enregistrer la réservation. Veuillez réessayer.'
-    );
-  }
-};
+      Alert.alert(
+        'Demande envoyée',
+        'Votre demande a été envoyée. Vous pouvez suivre votre course en direct.',
+        [
+          {
+            text: 'Suivre la course',
+            onPress: () =>
+              router.push({
+                pathname: '/course-tracking',
+                params: {
+                  id: rideDoc.id,
+                  rideId: rideDoc.id,
+                  address: departure,
+                  airport: destination,
+                  departure,
+                  destination,
+                  time: String(time || ''),
+                  price: String(finalPrice || '0'),
+                  status: 'En attente',
+                },
+              }),
+          },
+          {
+            text: 'Mes réservations',
+            onPress: () => router.push('/reservation'),
+          },
+        ],
+      );
+    } catch {
+      Alert.alert(
+        'Erreur',
+        'Impossible d’enregistrer la réservation. Veuillez réessayer.',
+      );
+    }
+  };
 
   const callTaxi = () => {
     Linking.openURL(`tel:${phoneNumber}`);
@@ -150,27 +161,28 @@ export default function ConfirmationScreen() {
 
   const openWhatsApp = () => {
     const message = encodeURIComponent(
-      `Bonjour PROTAXI24, je souhaite confirmer ma réservation.
-
-Service : ${String(service || 'Transfert aéroport')}
-Type : ${
-        mode === 'deposer'
-          ? 'Déposer à l’aéroport'
-          : 'Récupérer à l’aéroport'
-      }
-Adresse : ${departure || 'Non renseignée'}
-Destination : ${destination || 'Non renseignée'}
-Date : ${String(date || 'Non renseignée')}
-Heure : ${String(time || 'Non renseignée')}
-Passagers : ${String(passengers || '1')}
-Bagages : ${String(bags || '0')}
-Trajet : ${isRoundTrip ? 'Aller-retour (-5%)' : 'Aller simple'}
-Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
+      buildConfirmationWhatsAppMessage({
+        serviceLabel,
+        departure: departure || 'Non renseigné',
+        destination: destination || 'Non renseigné',
+        date: String(date || 'Non renseignée'),
+        time: String(time || 'Non renseignée'),
+        passengers: String(passengers || '1'),
+        bags: String(bags || '0'),
+        clientName,
+        clientPhone,
+        priceDisplay,
+        airportModeLabel,
+        tripTypeLabel,
+        rideMode: rideModeLabel,
+        showAirportType,
+        showTripType,
+        showRideMode,
+        showRoundTripDiscount: isRoundTrip && finalPrice > 0,
+      }),
     );
 
-    Linking.openURL(
-      `https://wa.me/${phoneNumber.replace('+', '')}?text=${message}`
-    );
+    Linking.openURL(`https://wa.me/${phoneNumber.replace('+', '')}?text=${message}`);
   };
 
   return (
@@ -191,44 +203,48 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
           <View style={{ width: 28 }} />
         </View>
 
-        <View style={styles.successBox}>
+        <View style={styles.heroBox}>
           <View style={styles.iconCircle}>
-            <Ionicons name="checkmark" size={48} color="#111" />
+            <Ionicons name="checkmark" size={44} color="#111" />
           </View>
 
-          <Text style={styles.title}>Réservation prête</Text>
+          <Text style={styles.heroTitle}>Demande prête</Text>
 
-          <Text style={styles.subtitle}>
-            Vérifiez les détails avant de confirmer votre transfert.
+          <Text style={styles.heroSubtitle}>
+            Vérifiez les détails avant de confirmer votre demande PROTAXI.
           </Text>
         </View>
 
         <View style={styles.card}>
+          <Text style={styles.cardTitle}>Trajet</Text>
+
           <InfoRow
-            icon="airplane"
+            icon="car-outline"
             label="Service"
-            value={String(service || 'Transfert aéroport')}
+            value={serviceLabel}
+          />
+
+          {showAirportType ? (
+            <InfoRow
+              icon="airplane-outline"
+              label="Type de transfert"
+              value={airportModeLabel}
+            />
+          ) : null}
+
+          {showRideMode ? (
+            <InfoRow icon="flash-outline" label="Mode" value={rideModeLabel} />
+          ) : null}
+
+          <InfoRow
+            icon="navigate-outline"
+            label="Départ"
+            value={departure || 'Non renseigné'}
           />
 
           <InfoRow
-            icon="swap-horizontal-outline"
-            label="Type"
-            value={
-              mode === 'deposer'
-                ? 'Déposer à l’aéroport'
-                : 'Récupérer à l’aéroport'
-            }
-          />
-
-          <InfoRow
-            icon="location-outline"
-            label="Adresse"
-            value={departure || 'Non renseignée'}
-          />
-
-          <InfoRow
-            icon="airplane-outline"
-            label="Aéroport"
+            icon="flag-outline"
+            label="Destination"
             value={destination || 'Non renseigné'}
           />
 
@@ -254,31 +270,54 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
             icon="briefcase-outline"
             label="Bagages"
             value={String(bags || '0')}
+            isLast={!showTripType && !showNotes}
           />
 
+          {showTripType ? (
+            <InfoRow
+              icon="repeat-outline"
+              label="Trajet"
+              value={tripTypeLabel}
+              isLast={!showNotes}
+            />
+          ) : null}
+
+          {showNotes ? (
+            <InfoRow
+              icon="chatbubble-ellipses-outline"
+              label="Notes"
+              value={notesLabel}
+              isLast
+            />
+          ) : null}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Contact</Text>
+
+          <InfoRow icon="person-outline" label="Nom" value={clientName} />
+
           <InfoRow
-            icon="repeat-outline"
-            label="Trajet"
-            value={isRoundTrip ? 'Aller-retour' : 'Aller simple'}
+            icon="call-outline"
+            label="Téléphone"
+            value={clientPhone}
+            isLast
           />
         </View>
 
         <View style={styles.priceBox}>
-          <Text style={styles.priceLabel}>Prix estimé</Text>
+          <View style={styles.priceHeader}>
+            <MaterialCommunityIcons name="cash-multiple" size={20} color={green} />
+            <Text style={styles.priceLabel}>Prix estimé</Text>
+          </View>
 
-          {isRoundTrip && (
-            <Text style={styles.discountText}>
-              Réduction aller-retour -5%
-            </Text>
-          )}
+          {isRoundTrip && finalPrice > 0 ? (
+            <Text style={styles.discountText}>Réduction aller-retour −5 %</Text>
+          ) : null}
 
-          <Text style={styles.price}>
-            {finalPrice.toLocaleString('fr-FR')} DZD
-          </Text>
+          <Text style={styles.price}>{priceDisplay}</Text>
 
-          <Text style={styles.priceNote}>
-            Paiement à la fin du trajet
-          </Text>
+          <Text style={styles.priceNote}>Paiement à la fin du trajet</Text>
         </View>
 
         <TouchableOpacity
@@ -286,9 +325,8 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
           activeOpacity={0.9}
           onPress={confirmFinal}
         >
-          <Text style={styles.mainBtnText}>
-            Confirmer la réservation
-          </Text>
+          <Text style={styles.mainBtnText}>Confirmer la demande</Text>
+          <Ionicons name="arrow-forward" size={20} color="#111" />
         </TouchableOpacity>
 
         <View style={styles.actions}>
@@ -297,7 +335,7 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
             activeOpacity={0.85}
             onPress={callTaxi}
           >
-            <Ionicons name="call-outline" size={22} color={gold} />
+            <Ionicons name="call-outline" size={22} color={green} />
             <Text style={styles.actionText}>Appeler</Text>
           </TouchableOpacity>
 
@@ -306,7 +344,7 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
             activeOpacity={0.85}
             onPress={openWhatsApp}
           >
-            <Ionicons name="logo-whatsapp" size={22} color={gold} />
+            <Ionicons name="logo-whatsapp" size={22} color={green} />
             <Text style={styles.actionText}>WhatsApp</Text>
           </TouchableOpacity>
         </View>
@@ -315,10 +353,22 @@ Prix estimé : ${finalPrice.toLocaleString('fr-FR')} DZD`
   );
 }
 
-function InfoRow({ icon, label, value }: any) {
+function InfoRow({
+  icon,
+  label,
+  value,
+  isLast = false,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  isLast?: boolean;
+}) {
   return (
-    <View style={styles.row}>
-      <Ionicons name={icon} size={23} color={gold} />
+    <View style={[styles.row, isLast && styles.rowLast]}>
+      <View style={styles.rowIconWrap}>
+        <Ionicons name={icon} size={18} color={green} />
+      </View>
 
       <View style={styles.rowText}>
         <Text style={styles.label}>{label}</Text>
@@ -352,95 +402,126 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
 
-  successBox: {
+  heroBox: {
     alignItems: 'center',
-    marginTop: 35,
-    marginBottom: 25,
+    marginTop: 28,
+    marginBottom: 22,
   },
 
   iconCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: gold,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: green,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 18,
+    marginBottom: 16,
   },
 
-  title: {
+  heroTitle: {
     color: '#FFF',
     fontSize: 28,
     fontWeight: '900',
   },
 
-  subtitle: {
+  heroSubtitle: {
     color: '#BDBDBD',
     fontSize: 15,
     textAlign: 'center',
     marginTop: 8,
     lineHeight: 22,
+    paddingHorizontal: 12,
   },
 
   card: {
     backgroundColor: 'rgba(18,18,18,0.96)',
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 22,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(139,197,63,0.18)',
+    marginBottom: 14,
+  },
+
+  cardTitle: {
+    color: green,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 8,
   },
 
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.06)',
   },
 
+  rowLast: {
+    borderBottomWidth: 0,
+  },
+
+  rowIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: 'rgba(139,197,63,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   rowText: {
-    marginLeft: 14,
+    marginLeft: 12,
     flex: 1,
   },
 
   label: {
     color: '#AAA',
-    fontSize: 13,
+    fontSize: 12,
+    fontWeight: '600',
   },
 
   value: {
     color: '#FFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     marginTop: 3,
   },
 
   priceBox: {
-    marginTop: 20,
-    backgroundColor: 'rgba(212,160,23,0.08)',
+    backgroundColor: 'rgba(139,197,63,0.08)',
     borderRadius: 22,
     padding: 18,
     borderWidth: 1,
-    borderColor: gold,
+    borderColor: 'rgba(139,197,63,0.28)',
+  },
+
+  priceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 
   priceLabel: {
     color: '#DDD',
     fontSize: 15,
+    fontWeight: '700',
   },
 
   discountText: {
-    color: '#4ADE80',
-    fontSize: 14,
+    color: green,
+    fontSize: 13,
     fontWeight: '800',
-    marginTop: 5,
+    marginTop: 8,
   },
 
   price: {
-    color: gold,
-    fontSize: 36,
+    color: green,
+    fontSize: 34,
     fontWeight: '900',
-    marginTop: 6,
+    marginTop: 8,
   },
 
   priceNote: {
@@ -450,17 +531,19 @@ const styles = StyleSheet.create({
   },
 
   mainBtn: {
-    height: 64,
-    borderRadius: 22,
-    backgroundColor: gold,
-    justifyContent: 'center',
+    height: 58,
+    borderRadius: 999,
+    backgroundColor: green,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 22,
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 20,
   },
 
   mainBtnText: {
     color: '#111',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '900',
   },
 
@@ -472,10 +555,11 @@ const styles = StyleSheet.create({
 
   actionBtn: {
     flex: 1,
-    height: 54,
+    height: 52,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(212,160,23,0.45)',
+    borderColor: 'rgba(139,197,63,0.35)',
+    backgroundColor: 'rgba(139,197,63,0.06)',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
