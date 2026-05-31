@@ -85,10 +85,18 @@ const phoneLink = '+213671421448';
 const GPS_STALE_MS = 30000;
 const GPS_FALLBACK_INTERVAL_MS = 5000;
 const GPS_AGE_TICK_MS = 1000;
+const CLIENT_DRIVER_LIVE_STATUSES = new Set(['Acceptée', 'En route', 'Arrivé']);
 const ACTIONS_ROW_HEIGHT = 44;
 const PANEL_TOP_PADDING = 6;
 
 type DriverGpsBadge = 'LIVE' | 'MOVING' | 'WEAK' | 'OFFLINE GPS' | 'SIMULATION';
+
+function canClientListenDriverLive(status: string, activeDriverId: string): boolean {
+  return (
+    activeDriverId.length > 0
+    && CLIENT_DRIVER_LIVE_STATUSES.has(normalizeRideTrackingStatus(status))
+  );
+}
 
 function getCompactGpsBadgeLabel(badge: DriverGpsBadge): string | null {
   switch (badge) {
@@ -573,11 +581,11 @@ useEffect(() => {
 
         const rideDriverId = String(data.driverId || '').trim();
         const rideDriverName = String(data.driverName || '').trim();
-        if (rideDriverId) {
-          setAssignedDriverId(rideDriverId);
-        }
+        setAssignedDriverId(rideDriverId);
         if (rideDriverName) {
           setAssignedDriverName(rideDriverName);
+        } else if (!rideDriverId) {
+          setAssignedDriverName('');
         }
 
         const nextStatus = normalizeRideTrackingStatus(data.status);
@@ -658,7 +666,7 @@ useEffect(() => {
 }, [hasValidRide, rideId]);
 
 useEffect(() => {
-  if (!hasValidRide || !driverId || demoMode) return;
+  if (!hasValidRide || demoMode || !canClientListenDriverLive(status, driverId)) return;
 
   const unsubscribe = onSnapshot(
     doc(db, 'driversLive', driverId),
@@ -733,7 +741,7 @@ useEffect(() => {
 }, [hasValidRide, driverId, demoMode, status]);
 
 useEffect(() => {
-  if (!hasValidRide || demoMode || !driverId) return;
+  if (!hasValidRide || demoMode || !canClientListenDriverLive(status, driverId)) return;
 
   const interval = setInterval(() => {
     if (!lastRealGpsAtRef.current) return;
@@ -752,7 +760,7 @@ useEffect(() => {
   }, GPS_AGE_TICK_MS);
 
   return () => clearInterval(interval);
-}, [hasValidRide, demoMode, driverId]);
+}, [hasValidRide, demoMode, driverId, status]);
 
 useEffect(() => {
   if (!hasValidRide || demoMode || driverId) return;
