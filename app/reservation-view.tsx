@@ -24,6 +24,7 @@ import {
   canClientOpenCourseTracking,
   getClientReservationStatusLabel,
   isScheduledAirportRide,
+  isScheduledCityRide,
   isScheduledManagedRide,
   isScheduledPrivateDriverRide,
   normalizeRideStatus,
@@ -40,13 +41,39 @@ const borderIdle = 'rgba(255,255,255,0.09)';
 const phoneDisplay = '+213 671 421 448';
 const phoneLink = '+213671421448';
 
-const TIMELINE_STEPS = [
-  'Transfert confirmé',
+const TIMELINE_TAIL = [
   'Préparation',
   'Chauffeur confirmé',
   'En route',
   'Terminée',
 ] as const;
+
+function getTimelineSteps(isScheduledCity: boolean) {
+  const firstStep = isScheduledCity ? 'Course confirmée' : 'Transfert confirmé';
+  return [firstStep, ...TIMELINE_TAIL];
+}
+
+function formatReservationPassengers(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '1 passager';
+  if (/passager/i.test(raw)) return raw;
+  const count = Number.parseInt(raw, 10);
+  if (Number.isFinite(count)) {
+    return count > 1 ? `${count} passagers` : `${count} passager`;
+  }
+  return raw;
+}
+
+function formatReservationBags(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '0 bagage';
+  if (/bagage/i.test(raw)) return raw;
+  const count = Number.parseInt(raw, 10);
+  if (Number.isFinite(count)) {
+    return count > 1 ? `${count} bagages` : `${count} bagage`;
+  }
+  return raw;
+}
 
 function getTimelineActiveIndex(status: string, isScheduledManaged: boolean): number {
   const normalized = normalizeRideStatus(status);
@@ -104,6 +131,7 @@ function getStatusHint(
   status: string,
   isScheduledManaged: boolean,
   isScheduledPrivate: boolean,
+  isScheduledCity: boolean,
 ): string {
   const normalized = normalizeRideStatus(status);
 
@@ -114,14 +142,18 @@ function getStatusHint(
 
   if (isScheduledManaged) {
     if (normalized === 'Confirmée') {
-      return isScheduledPrivate
-        ? 'Notre équipe prépare votre mise à disposition chauffeur.'
-        : 'Notre équipe vérifie votre vol avant le jour du trajet.';
+      if (isScheduledCity) {
+        return 'Votre course est confirmée. PROTAXI vous attribuera un chauffeur avant l’horaire prévu.';
+      }
+      if (isScheduledPrivate) {
+        return 'Notre équipe prépare votre mise à disposition chauffeur.';
+      }
+      return 'Notre équipe vérifie votre vol avant le jour du trajet.';
     }
     if (normalized === 'À attribuer' || normalized === 'En attente confirmation chauffeur') {
-      return isScheduledPrivate
-        ? 'PROTAXI prépare votre chauffeur privé.'
-        : 'PROTAXI prépare votre transfert.';
+      if (isScheduledCity) return 'PROTAXI prépare votre course.';
+      if (isScheduledPrivate) return 'PROTAXI prépare votre chauffeur privé.';
+      return 'PROTAXI prépare votre transfert.';
     }
     if (normalized === 'Chauffeur confirmé') {
       return 'Votre chauffeur est confirmé pour la date prévue.';
@@ -151,20 +183,32 @@ export default function ReservationViewScreen() {
   };
   const isScheduledAirport = isScheduledAirportRide(rideContext);
   const isScheduledPrivate = isScheduledPrivateDriverRide(rideContext);
+  const isScheduledCity = isScheduledCityRide(rideContext);
   const isScheduledManaged = isScheduledManagedRide(rideContext);
   const normalizedStatus = normalizeRideStatus(status);
   const statusLabel = getClientReservationStatusLabel(status, rideContext);
   const statusTone = getStatusTone(status, isScheduledManaged);
-  const statusHint = getStatusHint(status, isScheduledManaged, isScheduledPrivate);
+  const statusHint = getStatusHint(
+    status,
+    isScheduledManaged,
+    isScheduledPrivate,
+    isScheduledCity,
+  );
   const timelineActiveIndex = getTimelineActiveIndex(status, isScheduledManaged);
+  const timelineSteps = useMemo(
+    () => getTimelineSteps(isScheduledCity),
+    [isScheduledCity],
+  );
 
   const reservationId = String(params.id || Date.now()).slice(-6);
   const modePill = isScheduledManaged ? 'Planifié' : 'Maintenant';
   const headerTitle = isScheduledPrivate
     ? 'Votre chauffeur privé'
-    : isScheduledAirport
-      ? 'Votre transfert'
-      : 'Votre réservation';
+    : isScheduledCity
+      ? 'Votre course'
+      : isScheduledAirport
+        ? 'Votre transfert'
+        : 'Votre réservation';
 
   const priceNumber = parseInt(String(params.price || '0').replace(/\D/g, ''), 10);
   const finalPrice = isNaN(priceNumber) ? 0 : priceNumber;
@@ -193,13 +237,18 @@ export default function ReservationViewScreen() {
   const durationLabel = formatPrivateDriverDuration(
     String(params.durationHours || ''),
   );
-  const passengersLabel = `${String(params.passengers || '1')} passager${Number(params.passengers || 1) > 1 ? 's' : ''}`;
-  const bagsLabel = `${String(params.bags || '0')} bagage${Number(params.bags || 0) > 1 ? 's' : ''}`;
+  const passengersLabel = formatReservationPassengers(params.passengers);
+  const bagsLabel = formatReservationBags(params.bags);
+  const departureLabel = String(params.departure || addressLabel);
+  const destinationLabel = String(params.destination || '—');
+  const notesRaw = String(params.notes || '').trim();
+  const showCityNotes = Boolean(notesRaw && notesRaw !== 'Aucune note');
 
   const flightNumber = String(params.flightNumber || '').trim();
   const terminal = String(params.terminal || '').trim();
   const airline = String(params.airline || '').trim();
-  const hasFlightBlock = Boolean(flightNumber || terminal || airline);
+  const hasFlightBlock =
+    !isScheduledCity && Boolean(flightNumber || terminal || airline);
   const hasOptions =
     String(params.meetAndGreet || '') === 'true' || Boolean(String(params.notes || '').trim());
 
@@ -262,14 +311,25 @@ export default function ReservationViewScreen() {
 
   const openWhatsApp = () => {
     const message = encodeURIComponent(
-      `Bonjour PROTAXI, réservation #${reservationId}.
+      isScheduledCity
+        ? `Bonjour PROTAXI, réservation #${reservationId}.
+
+Service : ${String(params.service || 'Taxi ville')}
+Départ : ${departureLabel}
+Destination : ${destinationLabel}
+Date : ${dateLabel}
+Heure : ${timeLabel}
+Passagers : ${passengersLabel}
+Bagages : ${bagsLabel}
+Statut : ${statusLabel}`
+        : `Bonjour PROTAXI, réservation #${reservationId}.
 
 Service : ${String(params.service || 'Transfert aéroport')}
 Aéroport : ${airportLabel}
 Adresse : ${addressLabel}
 Date : ${dateLabel}
 Heure : ${timeLabel}
-Passagers : ${String(params.passengers || '1')}
+Passagers : ${passengersLabel}
 Statut : ${statusLabel}`,
     );
 
@@ -349,11 +409,11 @@ Statut : ${statusLabel}`,
 
         {normalizedStatus !== 'Annulée' ? (
           <View style={styles.timelineCard}>
-            {TIMELINE_STEPS.map((title, index) => (
+            {timelineSteps.map((title, index) => (
               <TimelineStep
-                key={title}
+                key={`${title}-${index}`}
                 title={title}
-                last={index === TIMELINE_STEPS.length - 1}
+                last={index === timelineSteps.length - 1}
                 done={timelineActiveIndex > index || normalizedStatus === 'Terminée'}
                 active={timelineActiveIndex === index && normalizedStatus !== 'Terminée'}
               />
@@ -383,76 +443,98 @@ Statut : ${statusLabel}`,
 
         <View style={styles.tripCard}>
           <Text style={styles.tripCardTitle}>
-            {isScheduledPrivate ? 'Votre demande' : 'Votre trajet'}
+            {isScheduledPrivate
+              ? 'Votre demande'
+              : isScheduledCity
+                ? 'Votre course'
+                : 'Votre trajet'}
           </Text>
 
-          {isScheduledPrivate && privateDriverModeLabel ? (
-            <TripRow label="Service" value={privateDriverModeLabel} />
-          ) : null}
-          {!isScheduledPrivate ? (
-            <TripRow label="Aéroport" value={airportLabel} />
-          ) : null}
-          {!isScheduledPrivate && directionLabel ? (
-            <TripRow label="Sens" value={directionLabel} />
-          ) : null}
-          <TripRow
-            label={isScheduledPrivate ? 'Départ' : 'Adresse'}
-            value={String(params.departure || addressLabel)}
-          />
-          {isScheduledPrivate || String(params.destination || '').trim() ? (
-            <TripRow
-              label="Destination"
-              value={String(params.destination || airportLabel)}
-            />
-          ) : null}
-          {isScheduledPrivate && String(params.durationHours || '').trim() ? (
-            <TripRow label="Durée" value={durationLabel} />
-          ) : null}
-
-          <View style={styles.divider} />
-
-          <View style={styles.whenRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.tripLabel}>Quand</Text>
-              <Text style={styles.tripValue}>{whenLabel}</Text>
-            </View>
-            <View style={styles.modePill}>
-              <Text style={styles.modePillText}>{modePill}</Text>
-            </View>
-          </View>
-
-          {hasFlightBlock ? (
+          {isScheduledCity ? (
             <>
+              <TripRow label="Départ" value={departureLabel} />
+              <TripRow label="Destination" value={destinationLabel} />
               <View style={styles.divider} />
-              {flightNumber ? <TripRow label="Vol" value={flightNumber} /> : null}
-              {terminal ? <TripRow label="Terminal" value={terminal} /> : null}
-              {airline ? <TripRow label="Compagnie" value={airline} /> : null}
-            </>
-          ) : null}
-
-          <View style={styles.divider} />
-
-          <TripRow label="Voyageurs" value={`${passengersLabel} · ${bagsLabel}`} />
-
-          {!isScheduledManaged ? (
-            <TripRow label="Type" value={isRoundTrip ? 'Aller-retour' : 'Aller simple'} />
-          ) : null}
-
-          {hasOptions ? (
-            <>
-              <View style={styles.divider} />
-              {String(params.meetAndGreet || '') === 'true' ? (
-                <TripRow label="Accueil" value="Pancarte à l’arrivée" />
-              ) : null}
-              {String(params.notes || '').trim() ? (
-                <TripRow label="Options" value={String(params.notes)} />
+              <TripRow label="Date / heure" value={whenLabel} />
+              <TripRow label="Passagers" value={passengersLabel} />
+              <TripRow label="Bagages" value={bagsLabel} />
+              {showCityNotes ? (
+                <TripRow label="Notes" value={notesRaw} />
               ) : null}
             </>
-          ) : null}
+          ) : (
+            <>
+              {isScheduledPrivate && privateDriverModeLabel ? (
+                <TripRow label="Service" value={privateDriverModeLabel} />
+              ) : null}
+              {isScheduledAirport ? (
+                <TripRow label="Aéroport" value={airportLabel} />
+              ) : null}
+              {isScheduledAirport && directionLabel ? (
+                <TripRow label="Sens" value={directionLabel} />
+              ) : null}
+              <TripRow
+                label={isScheduledPrivate ? 'Départ' : 'Adresse'}
+                value={departureLabel}
+              />
+              {isScheduledPrivate || String(params.destination || '').trim() ? (
+                <TripRow
+                  label="Destination"
+                  value={String(params.destination || airportLabel)}
+                />
+              ) : null}
+              {isScheduledPrivate && String(params.durationHours || '').trim() ? (
+                <TripRow label="Durée" value={durationLabel} />
+              ) : null}
+
+              <View style={styles.divider} />
+
+              <View style={styles.whenRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.tripLabel}>Quand</Text>
+                  <Text style={styles.tripValue}>{whenLabel}</Text>
+                </View>
+                <View style={styles.modePill}>
+                  <Text style={styles.modePillText}>{modePill}</Text>
+                </View>
+              </View>
+
+              {hasFlightBlock ? (
+                <>
+                  <View style={styles.divider} />
+                  {flightNumber ? <TripRow label="Vol" value={flightNumber} /> : null}
+                  {terminal ? <TripRow label="Terminal" value={terminal} /> : null}
+                  {airline ? <TripRow label="Compagnie" value={airline} /> : null}
+                </>
+              ) : null}
+
+              <View style={styles.divider} />
+
+              <TripRow label="Voyageurs" value={`${passengersLabel} · ${bagsLabel}`} />
+
+              {!isScheduledManaged ? (
+                <TripRow label="Type" value={isRoundTrip ? 'Aller-retour' : 'Aller simple'} />
+              ) : null}
+
+              {hasOptions ? (
+                <>
+                  <View style={styles.divider} />
+                  {String(params.meetAndGreet || '') === 'true' ? (
+                    <TripRow label="Accueil" value="Pancarte à l’arrivée" />
+                  ) : null}
+                  {notesRaw ? (
+                    <TripRow label="Options" value={notesRaw} />
+                  ) : null}
+                </>
+              ) : null}
+            </>
+          )}
 
           <View style={styles.divider} />
           <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>Tarif indicatif</Text>
+            <Text style={styles.priceLabel}>
+              {isScheduledCity ? 'Tarif' : 'Tarif indicatif'}
+            </Text>
             <Text style={styles.priceValue}>
               {finalPrice > 0
                 ? `${finalPrice.toLocaleString('fr-FR')} DZD`
