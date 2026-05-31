@@ -94,6 +94,7 @@ import {
   isDriverAssignmentAlert,
   canDriverStartScheduledAirportTransfer,
   isScheduledAirportRide,
+  isScheduledCityRide,
   isScheduledManagedRide,
   isScheduledPrivateDriverRide,
 } from '@/types/driver';
@@ -1939,7 +1940,9 @@ export default function DriversDashboardScreen() {
             <Text style={styles.acceptText}>
               {isScheduledPrivateDriverRide(ride)
                 ? 'DÉMARRER LA MISSION'
-                : 'DÉMARRER LE TRANSFERT'}
+                : isScheduledCityRide(ride)
+                  ? 'DÉMARRER LA COURSE'
+                  : 'DÉMARRER LE TRANSFERT'}
             </Text>
           </TouchableOpacity>
         )}
@@ -2714,7 +2717,7 @@ function canDriverStartScheduledManagedMission(ride: any) {
     return canDriverStartScheduledAirportTransfer(ride);
   }
 
-  if (isScheduledPrivateDriverRide(ride)) {
+  if (isScheduledPrivateDriverRide(ride) || isScheduledCityRide(ride)) {
     const scheduledMs = resolveRideScheduledAtMs(ride);
     if (scheduledMs === null) {
       const dateStr = String(ride?.date || '').trim();
@@ -2781,6 +2784,8 @@ function formatFlightLine(ride: any) {
 
 function ScheduledTripDetails({ ride }: { ride: any }) {
   const isPrivate = isScheduledPrivateDriverRide(ride);
+  const isCity = isScheduledCityRide(ride);
+  const isAirport = isScheduledAirportRide(ride);
   const airport = String(ride?.airport || ride?.destination || '—').trim();
   const direction = getTransferDirectionLabel(ride?.mode);
   const privateType =
@@ -2805,8 +2810,18 @@ function ScheduledTripDetails({ ride }: { ride: any }) {
       {isPrivate && privateType ? (
         <ScheduledDetailRow label="Service" value={privateType} />
       ) : null}
-      {!isPrivate ? <ScheduledDetailRow label="Aéroport" value={airport} /> : null}
-      {!isPrivate && direction ? (
+      {isCity ? (
+        <ScheduledDetailRow
+          label="Service"
+          value={
+            String(ride?.vehicleType || '').trim()
+              ? `Taxi ville • ${String(ride.vehicleType).trim()}`
+              : 'Taxi ville planifié'
+          }
+        />
+      ) : null}
+      {isAirport ? <ScheduledDetailRow label="Aéroport" value={airport} /> : null}
+      {isAirport && direction ? (
         <ScheduledDetailRow label="Sens" value={direction} />
       ) : null}
       <ScheduledDetailRow label="Départ" value={String(ride?.departure || address)} />
@@ -2817,7 +2832,7 @@ function ScheduledTripDetails({ ride }: { ride: any }) {
       {isPrivate && durationHours ? (
         <ScheduledDetailRow label="Durée" value={`${durationHours} h`} />
       ) : null}
-      {!isPrivate && flightLine ? (
+      {!isPrivate && !isCity && flightLine ? (
         <ScheduledDetailRow label="Vol" value={flightLine} />
       ) : null}
       <View style={styles.scheduledDivider} />
@@ -2953,6 +2968,7 @@ function CurrentRideCockpit({
   const scheduledPreRoute = isScheduledPreRouteCockpit(ride, status);
   const scheduledConfirmation = isScheduledConfirmationCockpit(ride, status);
   const isPrivateScheduled = isScheduledPrivateDriverRide(ride);
+  const isCityScheduled = isScheduledCityRide(ride);
   const scheduledConfirmed =
     isScheduledManagedRide(ride) && status === 'Chauffeur confirmé';
   const showStartTransfer =
@@ -3061,7 +3077,11 @@ function CurrentRideCockpit({
               <>
                 <Text style={styles.scheduledHeroTitle}>Confirmation requise</Text>
                 <Text style={styles.scheduledHeroSubtitle}>
-                  {isPrivateScheduled ? 'Chauffeur privé planifié' : 'Transfert aéroport planifié'}
+                  {isPrivateScheduled
+                    ? 'Chauffeur privé planifié'
+                    : isCityScheduled
+                      ? 'Taxi ville planifié'
+                      : 'Transfert aéroport planifié'}
                 </Text>
                 <Text style={styles.scheduledHeroHint}>
                   Répondez pour confirmer votre disponibilité.
@@ -3070,12 +3090,18 @@ function CurrentRideCockpit({
             ) : (
               <>
                 <Text style={styles.scheduledHeroTitle}>
-                  {isPrivateScheduled ? 'Mission confirmée' : 'Transfert confirmé'}
+                  {isPrivateScheduled
+                    ? 'Mission confirmée'
+                    : isCityScheduled
+                      ? 'Course confirmée'
+                      : 'Transfert confirmé'}
                 </Text>
                 <Text style={styles.scheduledHeroSubtitle}>
                   {isPrivateScheduled
                     ? 'Vous êtes réservé pour cette mise à disposition.'
-                    : 'Vous êtes réservé pour ce transfert.'}
+                    : isCityScheduled
+                      ? 'Vous êtes réservé pour cette course ville.'
+                      : 'Vous êtes réservé pour ce transfert.'}
                 </Text>
                 {showPendingStartHints ? (
                   <>
@@ -3083,7 +3109,7 @@ function CurrentRideCockpit({
                       Vous restez disponible pour les courses immédiates.
                     </Text>
                     <Text style={styles.scheduledHeroHint}>
-                      {isPrivateScheduled
+                      {isPrivateScheduled || isCityScheduled
                         ? 'Le démarrage sera disponible 20 min avant l&apos;horaire prévu.'
                         : 'Le démarrage sera disponible selon le temps d&apos;approche vers l&apos;aéroport.'}
                     </Text>
@@ -3130,7 +3156,11 @@ function CurrentRideCockpit({
               >
                 <Ionicons name="play-circle" size={22} color="#111" />
                 <Text style={styles.cockpitPrimaryText}>
-                  {isPrivateScheduled ? 'DÉMARRER LA MISSION' : 'DÉMARRER LE TRANSFERT'}
+                  {isPrivateScheduled
+                    ? 'DÉMARRER LA MISSION'
+                    : isCityScheduled
+                      ? 'DÉMARRER LA COURSE'
+                      : 'DÉMARRER LE TRANSFERT'}
                 </Text>
               </TouchableOpacity>
             ) : null}
